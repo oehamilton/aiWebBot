@@ -389,6 +389,14 @@ class AIWebBot:
                         else:
                             logger.warning("Failed to reply to post")
 
+                        # Refresh the page to get new posts and avoid replying to our own replies
+                        logger.info("Refreshing page to load new posts...")
+                        await self.page.reload()
+                        await asyncio.sleep(3)  # Wait for page to reload
+
+                        # Reset post index to start fresh after refresh
+                        self.current_post_index = 0
+
                         # Random delay between actions
                         delay = await self.get_random_delay()
                         logger.debug(f"Waiting {delay:.1f} seconds before next action")
@@ -508,16 +516,28 @@ class AIWebBot:
                     # Try to get post ID or unique identifier
                     post_id = await self._get_post_id(post_element, self.current_post_index)
 
-                    # Skip if already processed
+                    # Skip if we already replied to this post
                     if post_id in self.processed_post_ids:
-                        logger.debug(f"Skipping already processed post: {post_id}")
+                        logger.debug(f"Skipping already replied-to post: {post_id}")
                         self.current_post_index += 1
                         continue
 
                     # Extract post data
                     post_data = await self._extract_post_data(post_element, post_id)
                     if post_data and post_data.text.strip():
-                        self.processed_post_ids.add(post_id)
+                        # Skip posts that are replies to avoid replying to our own replies
+                        if "Why?" in post_data.text or "why?" in post_data.text:
+                            logger.info(f"SKIPPING post containing 'Why?' (likely our own reply): '{post_data.text}' by {post_data.author}")
+                            self.current_post_index += 1
+                            continue
+
+                        # Skip posts from our own account if we can detect it
+                        # For now, just skip very short posts that might be our replies
+                        if len(post_data.text.strip()) <= 10 and post_data.text.strip().lower() in ["why?", "why"]:
+                            logger.info(f"SKIPPING very short post that looks like our reply: '{post_data.text}' by {post_data.author}")
+                            self.current_post_index += 1
+                            continue
+
                         self.current_post_index += 1
                         logger.info(f"Successfully read post: '{post_data.text[:50]}...' by {post_data.author}")
                         return post_data
@@ -810,25 +830,30 @@ class AIWebBot:
                 await reply_input.click()
                 await asyncio.sleep(0.5)
 
-                # Clear any existing text
-                await reply_input.clear()
-
-                # Try different methods to enter text
-                await reply_input.fill(self.config.reply_text)
+                # Clear any existing text by selecting all and deleting
+                await reply_input.press("Control+a")
+                await reply_input.press("Backspace")
                 await asyncio.sleep(0.5)
 
-                # Verify text was entered
-                entered_text = await reply_input.input_value()
-                if entered_text != self.config.reply_text:
-                    logger.warning(f"Text entry failed. Expected: '{self.config.reply_text}', Got: '{entered_text}'")
-                    # Try typing instead of filling
-                    await reply_input.clear()
-                    await reply_input.type(self.config.reply_text, delay=100)
-                    await asyncio.sleep(0.5)
-
-                final_text = await reply_input.input_value()
-                logger.info(f"Final reply text in input: '{final_text}'")
+                # Enter our reply text by typing (more reliable than fill for contenteditable)
+                await reply_input.type(self.config.reply_text, delay=50)
                 await asyncio.sleep(1)
+
+                # Verify text was entered by checking the element's text content
+                try:
+                    entered_text = await reply_input.inner_text()
+                    if not entered_text or entered_text.strip() != self.config.reply_text:
+                        logger.warning(f"Text entry verification failed. Expected: '{self.config.reply_text}', Got: '{entered_text}'")
+                        # Try fill method as fallback
+                        await reply_input.fill("")
+                        await reply_input.fill(self.config.reply_text)
+                        await asyncio.sleep(0.5)
+                    else:
+                        logger.info(f"Successfully entered reply text: '{entered_text}'")
+                except:
+                    logger.info("Could not verify text entry, proceeding...")
+
+                await asyncio.sleep(2)  # Give time for UI to update and button to become enabled
             except Exception as e:
                 logger.warning(f"Failed to enter reply text: {e}")
                 return False
@@ -897,6 +922,11 @@ class AIWebBot:
             try:
                 await submit_button.click()
                 logger.info("Clicked submit button - reply posted!")
+
+                # Mark this post as replied to
+                self.processed_post_ids.add(post.post_id)
+                logger.debug(f"Marked post {post.post_id} as replied to")
+
                 await asyncio.sleep(2)  # Wait for submission to complete
                 return True
             except Exception as e:
