@@ -699,13 +699,15 @@ class AIWebBot:
                     '[data-testid*="modal"]',
                     '[data-testid*="reply"]',
                     '.modal-content',
-                    '[aria-modal="true"]'
+                    '[aria-modal="true"]',
+                    '[data-testid="Tweet-User-Reply"]',
+                    '[data-testid="tweetTextarea_0"]'
                 ]
 
                 modal_found = False
                 for selector in modal_selectors:
                     try:
-                        modal = await self.page.wait_for_selector(selector, timeout=3000)
+                        modal = await self.page.wait_for_selector(selector, timeout=5000)
                         if modal:
                             logger.info(f"Found reply modal with selector: {selector}")
                             modal_found = True
@@ -714,7 +716,36 @@ class AIWebBot:
                         continue
 
                 if not modal_found:
-                    logger.warning("Reply modal did not appear")
+                    logger.warning("Reply modal did not appear - checking page state")
+                    # Debug: take a screenshot and log current page elements
+                    try:
+                        await self.page.screenshot(path="debug_modal.png")
+                        logger.info("Saved debug screenshot: debug_modal.png")
+
+                        # Log all visible elements that might be related to replies
+                        debug_elements = await self.page.evaluate("""
+                            () => {
+                                const elements = document.querySelectorAll('[data-testid], [role], textarea, input');
+                                const results = [];
+                                for (let el of elements) {
+                                    if (el.offsetWidth > 0 && el.offsetHeight > 0) {  // Only visible elements
+                                        const attrs = {};
+                                        for (let attr of el.attributes) {
+                                            attrs[attr.name] = attr.value;
+                                        }
+                                        results.push({
+                                            tag: el.tagName,
+                                            attrs: attrs,
+                                            text: el.textContent?.substring(0, 50) || ''
+                                        });
+                                    }
+                                }
+                                return results.slice(0, 20); // First 20 visible elements
+                            }
+                        """)
+                        logger.info(f"Visible elements on page: {debug_elements}")
+                    except Exception as debug_e:
+                        logger.warning(f"Debug logging failed: {debug_e}")
 
             except Exception as e:
                 logger.warning(f"Error waiting for reply modal: {e}")
@@ -728,7 +759,12 @@ class AIWebBot:
                 'textarea[placeholder*="reply"]',
                 'textarea[placeholder*="Reply"]',
                 '[role="dialog"] [role="textbox"]',
-                '[aria-modal="true"] [role="textbox"]'
+                '[aria-modal="true"] [role="textbox"]',
+                '[data-testid="Tweet-User-Reply"] textarea',
+                '[data-testid="Tweet-User-Reply"] [contenteditable="true"]',
+                'div[data-testid*="tweet"][contenteditable="true"]',
+                '[data-testid*="reply"] textarea',
+                '[data-testid*="reply"] [contenteditable="true"]'
             ]
 
             reply_input = None
@@ -737,19 +773,61 @@ class AIWebBot:
                     reply_input = await self.page.wait_for_selector(selector, timeout=5000)
                     if reply_input:
                         logger.info(f"Found reply input with selector: {selector}")
-                        break
+                        # Check if it's actually visible and enabled
+                        is_visible = await reply_input.is_visible()
+                        logger.info(f"Reply input visible: {is_visible}")
+                        if is_visible:
+                            break
+                        else:
+                            reply_input = None
                 except:
                     continue
 
             if not reply_input:
                 logger.warning("Could not find reply text input in modal")
+                # Additional debugging for reply input
+                try:
+                    all_text_inputs = await self.page.evaluate("""
+                        () => {
+                            const inputs = document.querySelectorAll('textarea, [contenteditable="true"], input[type="text"]');
+                            return Array.from(inputs).map(input => ({
+                                tag: input.tagName,
+                                id: input.id,
+                                class: input.className,
+                                placeholder: input.placeholder,
+                                visible: input.offsetWidth > 0 && input.offsetHeight > 0
+                            })).filter(input => input.visible);
+                        }
+                    """)
+                    logger.info(f"All visible text inputs: {all_text_inputs}")
+                except Exception as debug_e:
+                    logger.warning(f"Text input debugging failed: {debug_e}")
                 return False
 
             # Clear any existing text and enter our reply
             try:
+                # First click on the input to focus it
+                await reply_input.click()
+                await asyncio.sleep(0.5)
+
+                # Clear any existing text
                 await reply_input.clear()
+
+                # Try different methods to enter text
                 await reply_input.fill(self.config.reply_text)
-                logger.info(f"Entered reply text: '{self.config.reply_text}'")
+                await asyncio.sleep(0.5)
+
+                # Verify text was entered
+                entered_text = await reply_input.input_value()
+                if entered_text != self.config.reply_text:
+                    logger.warning(f"Text entry failed. Expected: '{self.config.reply_text}', Got: '{entered_text}'")
+                    # Try typing instead of filling
+                    await reply_input.clear()
+                    await reply_input.type(self.config.reply_text, delay=100)
+                    await asyncio.sleep(0.5)
+
+                final_text = await reply_input.input_value()
+                logger.info(f"Final reply text in input: '{final_text}'")
                 await asyncio.sleep(1)
             except Exception as e:
                 logger.warning(f"Failed to enter reply text: {e}")
@@ -766,7 +844,10 @@ class AIWebBot:
                 '[aria-modal="true"] [role="button"]:has-text("Post")',
                 '[role="dialog"] button[type="submit"]',
                 '[aria-modal="true"] button[type="submit"]',
-                '[data-testid*="button"]:has-text("Reply")'
+                '[data-testid*="button"]:has-text("Reply")',
+                '[data-testid="Tweet-User-Reply"] button',
+                '[data-testid*="reply"] button',
+                'button[data-testid*="tweet"]:not([disabled])'
             ]
 
             submit_button = None
@@ -777,8 +858,11 @@ class AIWebBot:
                         # Check if button is visible and enabled
                         is_visible = await submit_button.is_visible()
                         is_disabled = await submit_button.get_attribute('aria-disabled')
-                        if is_visible and is_disabled != 'true':
-                            logger.info(f"Found submit button with selector: {selector}")
+                        button_text = await submit_button.inner_text()
+                        logger.info(f"Found button with selector '{selector}': visible={is_visible}, disabled={is_disabled}, text='{button_text}'")
+
+                        if is_visible and is_disabled != 'true' and ('Reply' in button_text or 'Post' in button_text):
+                            logger.info(f"Using submit button with selector: {selector}")
                             break
                         else:
                             submit_button = None
@@ -787,6 +871,26 @@ class AIWebBot:
 
             if not submit_button:
                 logger.warning("Could not find submit button or it's disabled")
+                # Additional debugging for buttons
+                try:
+                    all_buttons = await self.page.evaluate("""
+                        () => {
+                            const buttons = document.querySelectorAll('button, [role="button"]');
+                            return Array.from(buttons).map(button => ({
+                                tag: button.tagName,
+                                text: button.textContent?.trim(),
+                                disabled: button.disabled,
+                                visible: button.offsetWidth > 0 && button.offsetHeight > 0,
+                                attrs: Array.from(button.attributes).reduce((acc, attr) => {
+                                    acc[attr.name] = attr.value;
+                                    return acc;
+                                }, {})
+                            })).filter(button => button.visible).slice(0, 10); // First 10 visible buttons
+                        }
+                    """)
+                    logger.info(f"All visible buttons: {all_buttons}")
+                except Exception as debug_e:
+                    logger.warning(f"Button debugging failed: {debug_e}")
                 return False
 
             # Submit the reply
