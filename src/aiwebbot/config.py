@@ -85,6 +85,10 @@ class Config(BaseModel):
 
     reply_text: str = Field(default="Why?", description="Text to reply with")
 
+    # Authentication credentials (optional - if not provided, manual login required)
+    twitter_username: Optional[str] = Field(default=None, description="X/Twitter username for automatic login")
+    twitter_password: Optional[str] = Field(default=None, description="X/Twitter password for automatic login")
+
     model_config = ConfigDict(validate_assignment=True)
 
     @classmethod

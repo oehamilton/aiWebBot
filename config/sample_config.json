@@ -26,5 +26,7 @@
     "max_file_size": "10 MB",
     "retention": "7 days"
   },
-  "reply_text": "Why?"
+  "reply_text": "Why?",
+  "twitter_username": null,
+  "twitter_password": null
 }
