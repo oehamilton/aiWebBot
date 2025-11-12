@@ -33,6 +33,8 @@ class AIWebBot:
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
         self.running = False
+        self.processed_post_ids = set()  # Track processed posts to avoid duplicates
+        self.current_post_index = 0  # Track which post we're currently processing
 
     async def __aenter__(self):
         """Async context manager entry."""
@@ -387,13 +389,24 @@ class AIWebBot:
                         else:
                             logger.warning("Failed to reply to post")
 
-                    # Scroll to next post
-                    await self.scroll_to_next_post()
+                        # Random delay between actions
+                        delay = await self.get_random_delay()
+                        logger.debug(f"Waiting {delay:.1f} seconds before next action")
+                        await asyncio.sleep(delay)
+                    else:
+                        # No post found, try scrolling to load more
+                        logger.info("No new post found, scrolling to load more...")
+                        await self.scroll_to_next_post()
 
-                    # Random delay between actions
-                    delay = await self.get_random_delay()
-                    logger.debug(f"Waiting {delay:.1f} seconds before next action")
-                    await asyncio.sleep(delay)
+                        # Wait a bit for posts to load
+                        await asyncio.sleep(2)
+
+                        # Check again for posts after scrolling
+                        post = await self.read_next_post()
+                        if not post:
+                            # Still no posts, wait longer and try again
+                            logger.info("Still no posts after scrolling, waiting before retry...")
+                            await asyncio.sleep(5)
 
                 except Exception as e:
                     logger.error(f"Error in main loop: {e}")
@@ -408,18 +421,388 @@ class AIWebBot:
 
     async def read_next_post(self) -> Optional[PostData]:
         """Read the next post in the feed."""
-        # TODO: Implement post reading logic
-        logger.debug("Reading next post (not yet implemented)")
-        return None
+        if not self.page:
+            logger.error("Browser page not initialized")
+            return None
+
+        try:
+            # Wait for posts to load - look for timeline or feed indicators
+            await self.page.wait_for_selector('[data-testid="primaryColumn"], [role="main"], article, [data-testid*="reply"]', timeout=10000)
+
+            # Find all visible posts on the timeline - look for articles or posts with reply buttons
+            post_selectors = [
+                'article[data-testid*="tweet"]',
+                'article[role="article"]',
+                '[data-testid*="tweet"]:has([data-testid*="reply"])',
+                'article:has([data-testid*="reply"])',
+                'article:has(button[aria-label*="Reply"])',
+                'article:has(button[aria-label*="Reply to"])'
+            ]
+
+            posts_found = False
+            post_elements = []
+            for selector in post_selectors:
+                try:
+                    post_elements = await self.page.query_selector_all(selector)
+                    if post_elements and len(post_elements) > 0:
+                        logger.info(f"Found {len(post_elements)} posts using selector: {selector}")
+                        posts_found = True
+                        break
+                except Exception as e:
+                    logger.debug(f"Selector '{selector}' failed: {e}")
+                    continue
+
+            if not posts_found or not post_elements:
+                logger.warning("No posts found on the page with any selector")
+                # Let's debug what elements are actually on the page
+                try:
+                    all_articles = await self.page.query_selector_all('article')
+                    all_divs = await self.page.query_selector_all('div[data-testid*="tweet"]')
+
+                    # More comprehensive debugging - inspect current X interface
+                    debug_info = await self.page.evaluate("""
+                        () => {
+                            const results = {
+                                articles: document.querySelectorAll('article').length,
+                                dataTestIds: [],
+                                roles: [],
+                                replyButtons: document.querySelectorAll('[data-testid*="reply"]').length,
+                                tweetElements: document.querySelectorAll('[data-testid*="tweet"]').length
+                            };
+
+                            // Get unique data-testid values
+                            const testidElements = document.querySelectorAll('[data-testid]');
+                            const testids = new Set();
+                            for (let el of testidElements) {
+                                testids.add(el.getAttribute('data-testid'));
+                            }
+                            results.dataTestIds = Array.from(testids).slice(0, 15); // First 15 unique
+
+                            // Get unique role values
+                            const roleElements = document.querySelectorAll('[role]');
+                            const roles = new Set();
+                            for (let el of roleElements) {
+                                roles.add(el.getAttribute('role'));
+                            }
+                            results.roles = Array.from(roles).slice(0, 10); // First 10 unique
+
+                            return results;
+                        }
+                    """)
+
+                    logger.info(f"Debug: Found {debug_info['articles']} article elements")
+                    logger.info(f"Debug: Found {debug_info['replyButtons']} reply button elements")
+                    logger.info(f"Debug: Found {debug_info['tweetElements']} tweet-related elements")
+                    logger.info(f"Debug: Available data-testid attributes: {debug_info['dataTestIds']}")
+                    logger.info(f"Debug: Available role attributes: {debug_info['roles']}")
+
+                except Exception as e:
+                    logger.warning(f"Debug inspection failed: {e}")
+                return None
+
+            # Get the post at current index (skip already processed ones)
+            while self.current_post_index < len(post_elements):
+                try:
+                    post_element = post_elements[self.current_post_index]
+
+                    # Try to get post ID or unique identifier
+                    post_id = await self._get_post_id(post_element, self.current_post_index)
+
+                    # Skip if already processed
+                    if post_id in self.processed_post_ids:
+                        logger.debug(f"Skipping already processed post: {post_id}")
+                        self.current_post_index += 1
+                        continue
+
+                    # Extract post data
+                    post_data = await self._extract_post_data(post_element, post_id)
+                    if post_data and post_data.text.strip():
+                        self.processed_post_ids.add(post_id)
+                        self.current_post_index += 1
+                        logger.info(f"Successfully read post: '{post_data.text[:50]}...' by {post_data.author}")
+                        return post_data
+                    else:
+                        logger.debug(f"Post at index {self.current_post_index} had no extractable text, skipping")
+
+                    self.current_post_index += 1
+
+                except Exception as e:
+                    logger.warning(f"Error reading post at index {self.current_post_index}: {e}")
+                    self.current_post_index += 1
+                    continue
+
+            # If we've processed all visible posts, try scrolling to load more
+            logger.info("Reached end of visible posts, need to scroll for more")
+            return None
+
+        except Exception as e:
+            logger.error(f"Error reading next post: {e}")
+            return None
+
+    async def _get_post_id(self, post_element, index: int) -> str:
+        """Generate a unique identifier for a post."""
+        try:
+            # Try to get the post ID from various attributes
+            post_id = await post_element.get_attribute('data-testid')
+            if post_id and 'tweet' in post_id.lower():
+                return f"{post_id}_{index}"
+
+            # Try to get href or other identifying attributes
+            href = await post_element.get_attribute('href')
+            if href:
+                return f"href_{href}_{index}"
+
+            # Fallback to index-based ID
+            return f"post_{index}_{int(time.time())}"
+
+        except:
+            # Final fallback
+            return f"fallback_{index}_{int(time.time())}"
+
+    async def _extract_post_data(self, post_element, post_id: str) -> Optional[PostData]:
+        """Extract text, author, and other data from a post element."""
+        try:
+            # Get the text content from the article
+            text_content = ""
+            try:
+                # Look for text content within the article - try multiple approaches
+                text_selectors = [
+                    '[data-testid="tweetText"]',
+                    '[data-testid="Tweet-User-Text"]',
+                    'div[data-testid*="tweet"] [lang]',
+                    '[role="group"] [lang]',
+                    'article [lang]',
+                    'span[dir="ltr"]',
+                    'div[dir="ltr"]'
+                ]
+
+                for selector in text_selectors:
+                    try:
+                        text_element = await post_element.query_selector(selector)
+                        if text_element:
+                            text_content = await text_element.inner_text()
+                            if text_content and text_content.strip():
+                                # Clean up the text (remove extra whitespace, newlines)
+                                text_content = ' '.join(text_content.split())
+                                break
+                    except:
+                        continue
+
+            except:
+                pass
+
+            # Get author information
+            author = "Unknown"
+            try:
+                # Try to find author name within the article
+                author_selectors = [
+                    '[data-testid="User-Name"]',
+                    '[role="link"] [dir="ltr"]',
+                    '[data-testid*="user"] [dir="ltr"]',
+                    'article [role="link"] [dir="ltr"]',
+                    'article [role="link"] span',
+                    '[data-testid="Tweet-User-Name"]',
+                    'article [data-testid*="user"]'
+                ]
+
+                for selector in author_selectors:
+                    try:
+                        author_element = await post_element.query_selector(selector)
+                        if author_element:
+                            author_text = await author_element.inner_text()
+                            if author_text and author_text.strip() and len(author_text.strip()) > 1:
+                                author = author_text.strip()
+                                break
+                    except:
+                        continue
+
+            except:
+                pass
+
+            # Get timestamp if available
+            timestamp = None
+            try:
+                time_element = await post_element.query_selector('time')
+                if time_element:
+                    timestamp = await time_element.get_attribute('datetime')
+            except:
+                pass
+
+            if not text_content.strip():
+                return None
+
+            return PostData(
+                text=text_content.strip(),
+                author=author,
+                post_id=post_id,
+                timestamp=timestamp
+            )
+
+        except Exception as e:
+            logger.warning(f"Error extracting post data: {e}")
+            return None
 
     async def reply_to_post(self, post: PostData) -> bool:
         """Reply to a specific post."""
-        # TODO: Implement reply logic
-        logger.debug(f"Replying to post (not yet implemented): {post.text[:50]}...")
-        return False
+        if not self.page:
+            logger.error("Browser page not initialized")
+            return False
+
+        try:
+            logger.info(f"Attempting to reply to post: '{post.text[:50]}...' by {post.author}")
+
+            # Find the reply button within this specific post
+            # We need to find the post element again and locate its reply button
+            reply_selectors = [
+                '[data-testid="reply"]',
+                '[role="button"][aria-label*="Reply"]',
+                '[role="button"][aria-label*="Reply to"]',
+                'button[aria-label*="Reply"]',
+                '[data-testid*="reply"]:not([aria-disabled="true"])'
+            ]
+
+            reply_button = None
+            for selector in reply_selectors:
+                try:
+                    # Try to find reply buttons and click the first one that's visible and enabled
+                    reply_buttons = await self.page.query_selector_all(selector)
+                    for button in reply_buttons:
+                        # Check if button is visible and not disabled
+                        is_visible = await button.is_visible()
+                        if is_visible:
+                            reply_button = button
+                            break
+                    if reply_button:
+                        break
+                except Exception as e:
+                    logger.debug(f"Reply selector '{selector}' failed: {e}")
+                    continue
+
+            if not reply_button:
+                logger.warning("Could not find reply button on the page")
+                return False
+
+            # Click the reply button
+            try:
+                await reply_button.click()
+                logger.info("Clicked reply button")
+                await asyncio.sleep(2)  # Wait for reply interface to load
+            except Exception as e:
+                logger.warning(f"Failed to click reply button: {e}")
+                return False
+
+            # Wait for the reply input to appear
+            reply_input_selectors = [
+                '[data-testid="tweetTextarea_0"]',
+                '[data-testid="tweetTextarea_1"]',
+                '[role="textbox"][contenteditable="true"]',
+                '[data-testid*="tweet"] textarea',
+                'textarea[placeholder*="reply"]',
+                'textarea[placeholder*="Reply"]'
+            ]
+
+            reply_input = None
+            for selector in reply_input_selectors:
+                try:
+                    reply_input = await self.page.wait_for_selector(selector, timeout=5000)
+                    if reply_input:
+                        logger.info(f"Found reply input with selector: {selector}")
+                        break
+                except:
+                    continue
+
+            if not reply_input:
+                logger.warning("Could not find reply text input")
+                return False
+
+            # Clear any existing text and enter our reply
+            try:
+                await reply_input.clear()
+                await reply_input.fill(self.config.reply_text)
+                logger.info(f"Entered reply text: '{self.config.reply_text}'")
+                await asyncio.sleep(1)
+            except Exception as e:
+                logger.warning(f"Failed to enter reply text: {e}")
+                return False
+
+            # Find and click the submit button
+            submit_selectors = [
+                '[data-testid="tweetButton"]',
+                '[data-testid="tweetButtonInline"]',
+                '[role="button"]:has-text("Reply")',
+                '[role="button"]:has-text("Post")',
+                'button[type="submit"]',
+                '[data-testid*="button"]:has-text("Reply")'
+            ]
+
+            submit_button = None
+            for selector in submit_selectors:
+                try:
+                    submit_button = await self.page.query_selector(selector)
+                    if submit_button:
+                        # Check if button is enabled
+                        is_disabled = await submit_button.get_attribute('aria-disabled')
+                        if is_disabled != 'true':
+                            logger.info(f"Found submit button with selector: {selector}")
+                            break
+                        else:
+                            submit_button = None
+                except:
+                    continue
+
+            if not submit_button:
+                logger.warning("Could not find submit button or it's disabled")
+                return False
+
+            # Submit the reply
+            try:
+                await submit_button.click()
+                logger.info("Clicked submit button - reply posted!")
+                await asyncio.sleep(2)  # Wait for submission to complete
+                return True
+            except Exception as e:
+                logger.warning(f"Failed to submit reply: {e}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error replying to post: {e}")
+            return False
 
     async def scroll_to_next_post(self) -> None:
         """Scroll to the next post in the feed."""
-        # TODO: Implement scrolling logic
-        logger.debug("Scrolling to next post (not yet implemented)")
-        await asyncio.sleep(1)
+        if not self.page:
+            logger.error("Browser page not initialized")
+            return
+
+        try:
+            # Get current scroll position
+            current_scroll = await self.page.evaluate("window.scrollY")
+
+            # Calculate new scroll position (scroll down by viewport height)
+            viewport_height = await self.page.evaluate("window.innerHeight")
+            new_scroll = current_scroll + viewport_height * 0.8  # Scroll 80% of viewport height
+
+            # Smooth scroll to new position
+            await self.page.evaluate(f"""
+                window.scrollTo({{
+                    top: {new_scroll},
+                    behavior: 'smooth'
+                }});
+            """)
+
+            # Wait for new content to load
+            await asyncio.sleep(2)
+
+            # Check if we actually scrolled (to detect end of feed)
+            actual_scroll = await self.page.evaluate("window.scrollY")
+            if abs(actual_scroll - current_scroll) < 10:  # Less than 10px movement
+                logger.info("Reached end of feed, no more posts to load")
+                # Could implement page refresh here if needed
+                # await self.page.reload()
+                # await asyncio.sleep(3)
+            else:
+                logger.debug(f"Scrolled from {current_scroll} to {actual_scroll}")
+
+        except Exception as e:
+            logger.error(f"Error scrolling to next post: {e}")
+            await asyncio.sleep(1)
