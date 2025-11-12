@@ -1,0 +1,30 @@
+{
+  "browser": {
+    "headless": false,
+    "slow_mo": 1000,
+    "timeout": 30000,
+    "viewport_width": 1280,
+    "viewport_height": 720
+  },
+  "timing": {
+    "min_delay_between_actions": 5.0,
+    "max_delay_between_actions": 15.0,
+    "page_load_timeout": 10.0,
+    "reply_timeout": 30.0
+  },
+  "twitter": {
+    "base_url": "https://x.com",
+    "home_url": "https://x.com/home",
+    "post_selector": "[data-testid=\"tweetText\"]",
+    "reply_button_selector": "[data-testid=\"reply\"]",
+    "reply_textarea_selector": "[data-testid=\"tweetTextarea_0\"]",
+    "reply_submit_selector": "[data-testid=\"tweetButton\"]"
+  },
+  "logging": {
+    "level": "INFO",
+    "file_path": null,
+    "max_file_size": "10 MB",
+    "retention": "7 days"
+  },
+  "reply_text": "Why?"
+}

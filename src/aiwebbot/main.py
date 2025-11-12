@@ -9,6 +9,7 @@ from loguru import logger
 
 from .bot import AIWebBot
 from .config import Config
+from . import __version__
 
 
 def setup_logging(config: Config) -> None:
@@ -76,8 +77,8 @@ async def main() -> None:
     setup_logging(config)
 
     logger.info("Starting AI Web Bot")
-    logger.info(f"Version: {sys.modules['aiwebbot'].__version__}")
-    logger.info(f"Configuration: {config.dict(exclude={'twitter': {'post_selector', 'reply_button_selector', 'reply_textarea_selector', 'reply_submit_selector'}})}")
+    logger.info(f"Version: {__version__}")
+    logger.info(f"Configuration: {config.model_dump(exclude={'twitter': {'post_selector', 'reply_button_selector', 'reply_textarea_selector', 'reply_submit_selector'}})}")
 
     # Setup signal handlers for graceful shutdown
     def signal_handler(signum, frame):

@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Optional
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 
 
 class BrowserConfig(BaseModel):
@@ -57,7 +57,8 @@ class TwitterConfig(BaseModel):
         description="CSS selector for reply submit button"
     )
 
-    @validator("base_url", "home_url")
+    @field_validator("base_url", "home_url")
+    @classmethod
     def validate_urls(cls, v):
         """Ensure URLs are valid."""
         if not v.startswith("https://"):
@@ -84,9 +85,7 @@ class Config(BaseModel):
 
     reply_text: str = Field(default="Why?", description="Text to reply with")
 
-    class Config:
-        """Pydantic configuration."""
-        validate_assignment = True
+    model_config = ConfigDict(validate_assignment=True)
 
     @classmethod
     def from_file(cls, config_path: Path) -> "Config":
@@ -102,4 +101,4 @@ class Config(BaseModel):
         import json
 
         with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(self.dict(), f, indent=2, ensure_ascii=False)
+            json.dump(self.model_dump(), f, indent=2, ensure_ascii=False)
