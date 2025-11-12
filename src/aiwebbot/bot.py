@@ -686,19 +686,49 @@ class AIWebBot:
             try:
                 await reply_button.click()
                 logger.info("Clicked reply button")
-                await asyncio.sleep(2)  # Wait for reply interface to load
+                await asyncio.sleep(2)  # Wait for modal to appear
             except Exception as e:
                 logger.warning(f"Failed to click reply button: {e}")
                 return False
 
-            # Wait for the reply input to appear
+            # Wait for the reply modal to appear
+            try:
+                # Look for modal indicators
+                modal_selectors = [
+                    '[role="dialog"]',
+                    '[data-testid*="modal"]',
+                    '[data-testid*="reply"]',
+                    '.modal-content',
+                    '[aria-modal="true"]'
+                ]
+
+                modal_found = False
+                for selector in modal_selectors:
+                    try:
+                        modal = await self.page.wait_for_selector(selector, timeout=3000)
+                        if modal:
+                            logger.info(f"Found reply modal with selector: {selector}")
+                            modal_found = True
+                            break
+                    except:
+                        continue
+
+                if not modal_found:
+                    logger.warning("Reply modal did not appear")
+
+            except Exception as e:
+                logger.warning(f"Error waiting for reply modal: {e}")
+
+            # Wait for the reply input to appear (in the modal)
             reply_input_selectors = [
                 '[data-testid="tweetTextarea_0"]',
                 '[data-testid="tweetTextarea_1"]',
                 '[role="textbox"][contenteditable="true"]',
-                '[data-testid*="tweet"] textarea',
+                '[data-testid*="tweet"] [role="textbox"]',
                 'textarea[placeholder*="reply"]',
-                'textarea[placeholder*="Reply"]'
+                'textarea[placeholder*="Reply"]',
+                '[role="dialog"] [role="textbox"]',
+                '[aria-modal="true"] [role="textbox"]'
             ]
 
             reply_input = None
@@ -712,7 +742,7 @@ class AIWebBot:
                     continue
 
             if not reply_input:
-                logger.warning("Could not find reply text input")
+                logger.warning("Could not find reply text input in modal")
                 return False
 
             # Clear any existing text and enter our reply
@@ -725,13 +755,17 @@ class AIWebBot:
                 logger.warning(f"Failed to enter reply text: {e}")
                 return False
 
-            # Find and click the submit button
+            # Find and click the submit button (in the modal)
             submit_selectors = [
-                '[data-testid="tweetButton"]',
+                '[role="dialog"] [data-testid="tweetButton"]',
+                '[aria-modal="true"] [data-testid="tweetButton"]',
                 '[data-testid="tweetButtonInline"]',
-                '[role="button"]:has-text("Reply")',
-                '[role="button"]:has-text("Post")',
-                'button[type="submit"]',
+                '[role="dialog"] [role="button"]:has-text("Reply")',
+                '[aria-modal="true"] [role="button"]:has-text("Reply")',
+                '[role="dialog"] [role="button"]:has-text("Post")',
+                '[aria-modal="true"] [role="button"]:has-text("Post")',
+                '[role="dialog"] button[type="submit"]',
+                '[aria-modal="true"] button[type="submit"]',
                 '[data-testid*="button"]:has-text("Reply")'
             ]
 
@@ -740,9 +774,10 @@ class AIWebBot:
                 try:
                     submit_button = await self.page.query_selector(selector)
                     if submit_button:
-                        # Check if button is enabled
+                        # Check if button is visible and enabled
+                        is_visible = await submit_button.is_visible()
                         is_disabled = await submit_button.get_attribute('aria-disabled')
-                        if is_disabled != 'true':
+                        if is_visible and is_disabled != 'true':
                             logger.info(f"Found submit button with selector: {selector}")
                             break
                         else:
