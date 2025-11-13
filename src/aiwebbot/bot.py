@@ -18,7 +18,7 @@ GROK_API_KEY = os.getenv("GROK_API_KEY")
 GROK_API_ENDPOINT = "https://api.x.ai/v1/chat/completions"
 
 # System prompt for generating replies
-SYSTEM_PROMPT = "You are an AI assistant focused on advancing humanity toward a Type 1 civilization on the Kardashev scale. Generate concise, insightful replies (60 characters or less) that promote scientific progress, technological advancement, critical thinking, or positive societal change. Replies should be thought-provoking and actionable."
+SYSTEM_PROMPT = "You are an AI assistant focused on advancing humanity toward a Type 1 civilization on the Kardashev scale. Generate concise, insightful replies (128 characters or less) that promote scientific progress, technological advancement, critical thinking, profit focused on early stage investing in energy, robotics, AI, or positive societal change. Replies should be thought-provoking and actionable."
 
 
 async def call_grok_api(session, system_prompt, user_prompt, model="grok-3", max_tokens=50, retries=3):
@@ -46,10 +46,10 @@ async def call_grok_api(session, system_prompt, user_prompt, model="grok-3", max
                 if response.status == 200:
                     result = await response.json()
                     reply = result["choices"][0]["message"]["content"].strip()
-
-                    # Ensure reply is 60 characters or less
-                    if len(reply) > 60:
-                        reply = reply[:57] + "..."
+                    reply = reply + "."
+                    # Ensure reply is 500 characters or less
+                    if len(reply) > 500:
+                        reply = reply[:497] + "..."
 
                     logger.info(f"Grok generated reply: '{reply}' (len: {len(reply)})")
                     return reply
@@ -1097,6 +1097,89 @@ class AIWebBot:
                 logger.debug(f"Added reply to tracking: '{reply_text}' (total tracked: {len(self.recent_replies)})")
 
                 await asyncio.sleep(2)  # Wait for submission to complete
+
+                # Ensure the reply modal has closed; if not, close it and refresh the feed
+                modal_visibility_selectors = [
+                    '[role="dialog"]',
+                    '[aria-modal="true"]',
+                    '[data-testid*="modal"]',
+                    '[data-testid="Tweet-User-Reply"]',
+                    '[data-testid="tweetTextarea_0"]'
+                ]
+
+                modal_still_open = False
+                for selector in modal_visibility_selectors:
+                    try:
+                        element = await self.page.query_selector(selector)
+                        if element and await element.is_visible():
+                            modal_still_open = True
+                            logger.warning(f"Reply modal still visible after submit (selector: {selector})")
+                            break
+                    except Exception as modal_check_error:
+                        logger.debug(f"Modal visibility check failed for selector '{selector}': {modal_check_error}")
+
+                if modal_still_open:
+                    logger.info("Attempting to close lingering reply modal")
+                    close_button_selectors = [
+                        '[data-testid="app-bar-close"]',
+                        '[data-testid="modalClose"]',
+                        '[role="button"][aria-label="Close"]',
+                        '[role="button"][aria-label="close"]',
+                        '[role="button"][aria-label*="Close"]',
+                        '[data-testid*="close"]'
+                    ]
+
+                    for selector in close_button_selectors:
+                        try:
+                            close_button = await self.page.query_selector(selector)
+                            if close_button and await close_button.is_visible():
+                                await close_button.click()
+                                logger.info(f"Clicked close button selector: {selector}")
+                                await asyncio.sleep(1)
+                                break
+                        except Exception as close_error:
+                            logger.debug(f"Close selector '{selector}' failed: {close_error}")
+
+                    # Re-check modal visibility after attempting to click close
+                    modal_still_open = False
+                    for selector in modal_visibility_selectors:
+                        try:
+                            element = await self.page.query_selector(selector)
+                            if element and await element.is_visible():
+                                modal_still_open = True
+                                break
+                        except Exception:
+                            continue
+
+                    if modal_still_open:
+                        try:
+                            await self.page.keyboard.press("Escape")
+                            logger.info("Pressed Escape key to dismiss reply modal")
+                            await asyncio.sleep(1)
+                        except Exception as escape_error:
+                            logger.debug(f"Escape key press failed: {escape_error}")
+
+                        # Final visibility check
+                        modal_still_open = False
+                        for selector in modal_visibility_selectors:
+                            try:
+                                element = await self.page.query_selector(selector)
+                                if element and await element.is_visible():
+                                    modal_still_open = True
+                                    break
+                            except Exception:
+                                continue
+
+                    if modal_still_open:
+                        logger.warning("Reply modal remained open after manual close attempts")
+                    else:
+                        logger.info("Reply modal closed successfully after manual intervention")
+
+                    try:
+                        await self.refresh_feed("modal stuck after replying")
+                    except Exception as refresh_error:
+                        logger.warning(f"Failed to refresh feed after closing modal: {refresh_error}")
+
                 return True
             except Exception as e:
                 logger.warning(f"Failed to submit reply: {e}")
