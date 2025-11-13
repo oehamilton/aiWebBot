@@ -5,7 +5,8 @@ An automated Python application that interacts with X (formerly Twitter) by read
 ## Features
 
 - **Automated Post Reading**: Extracts text content from X/Twitter posts
-- **Automated Replies**: Responds to posts with configurable text (default: "Why?")
+- **AI-Powered Replies**: Uses Grok AI to generate intelligent replies focused on advancing humanity toward Type 1 civilization
+- **Smart Reply Filtering**: Avoids replying to AI-generated content to prevent loops
 - **Continuous Scrolling**: Automatically scrolls through the feed
 - **Page Refresh**: Refreshes the page when reaching the bottom
 - **Configurable Timing**: Adjustable delays between actions to appear human-like
@@ -16,6 +17,7 @@ An automated Python application that interacts with X (formerly Twitter) by read
 
 - Python 3.9+
 - Active X/Twitter account (bot uses existing browser session)
+- Grok API key (optional - falls back to static replies if not provided)
 
 ## Installation
 
@@ -45,6 +47,12 @@ An automated Python application that interacts with X (formerly Twitter) by read
    playwright install
    ```
 
+5. **Set up Grok API (optional):**
+   ```bash
+   export GROK_API_KEY="your-grok-api-key-here"
+   ```
+   If not set, the bot will use static "Why?" replies.
+
 ## Configuration
 
 Create a configuration file based on the sample:
@@ -65,7 +73,24 @@ cp config/sample_config.json config/my_config.json
 - **Timing**: Configure delays between actions (important for rate limiting)
 - **Twitter Selectors**: CSS selectors for X/Twitter elements (may need updates if UI changes)
 - **Logging**: Configure log level, file output, retention
-- **Reply Text**: Customize the reply message
+- **Reply Text**: Customize the reply message (only used if Grok API is not available)
+
+## AI Reply Generation
+
+When a Grok API key is provided, the bot generates intelligent replies focused on advancing humanity toward a Type 1 civilization. Each reply is limited to 30 characters and emphasizes:
+
+- Scientific progress and technological advancement
+- Critical thinking and problem-solving
+- Positive societal change
+- Innovation and exploration
+
+**Example replies:**
+- "Innovate relentlessly! 🚀"
+- "Think exponentially! 📈"
+- "Question everything! 🤔"
+- "Build the future! 🔮"
+
+The AI analyzes each post's content and generates contextually relevant replies that promote intellectual growth and human advancement.
 
 ## Usage
 
