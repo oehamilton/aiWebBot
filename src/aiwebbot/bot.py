@@ -21,7 +21,7 @@ GROK_API_ENDPOINT = "https://api.x.ai/v1/chat/completions"
 SYSTEM_PROMPT = "You are an AI assistant focused on advancing humanity toward a Type 1 civilization on the Kardashev scale. Generate concise, insightful replies (30 characters or less) that promote scientific progress, technological advancement, critical thinking, or positive societal change. Replies should be thought-provoking and actionable."
 
 
-async def call_grok_api(session, system_prompt, user_prompt, model="grok-beta", max_tokens=50, retries=3):
+async def call_grok_api(session, system_prompt, user_prompt, model="grok-3", max_tokens=50, retries=3):
     """Async call to Grok API with retry and debug"""
     headers = {
         "Authorization": f"Bearer {GROK_API_KEY}",
@@ -450,13 +450,9 @@ class AIWebBot:
                         else:
                             logger.warning("Failed to reply to post")
 
-                        # Refresh the page to get new posts and avoid replying to our own replies
-                        logger.info("Refreshing page to load new posts...")
-                        await self.page.reload()
-                        await asyncio.sleep(3)  # Wait for page to reload
-
-                        # Reset post index to start fresh after refresh
-                        self.current_post_index = 0
+                        # Instead of refreshing, just continue reading from where we left off
+                        # The page will naturally update with new posts as we scroll
+                        logger.info("Continuing with next posts in feed...")
 
                         # Random delay between actions
                         delay = await self.get_random_delay()
@@ -630,22 +626,41 @@ class AIWebBot:
             return None
 
     async def _get_post_id(self, post_element, index: int) -> str:
-        """Generate a unique identifier for a post."""
+        """Generate a unique identifier for a post using content and attributes."""
         try:
+            # Try to get post content for a more unique identifier
+            post_text = ""
+            try:
+                text_element = await post_element.query_selector('[data-testid="tweetText"]')
+                if text_element:
+                    post_text = await text_element.inner_text()
+                    # Use first 50 characters as part of ID (cleaned)
+                    content_part = post_text[:50].strip().replace('\n', ' ')
+                    content_hash = hash(content_part) if content_part else 0
+                else:
+                    content_hash = 0
+            except:
+                content_hash = 0
+
             # Try to get the post ID from various attributes
             post_id = await post_element.get_attribute('data-testid')
             if post_id and 'tweet' in post_id.lower():
-                return f"{post_id}_{index}"
+                return f"{post_id}_{content_hash}_{index}"
 
             # Try to get href or other identifying attributes
             href = await post_element.get_attribute('href')
             if href:
-                return f"href_{href}_{index}"
+                return f"href_{href}_{content_hash}_{index}"
 
-            # Fallback to index-based ID
+            # Use content-based ID if we have content
+            if content_hash != 0:
+                return f"content_{content_hash}_{index}"
+
+            # Fallback to index-based ID with timestamp
             return f"post_{index}_{int(time.time())}"
 
-        except:
+        except Exception as e:
+            logger.debug(f"Error generating post ID: {e}")
             # Final fallback
             return f"fallback_{index}_{int(time.time())}"
 

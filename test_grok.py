@@ -9,11 +9,11 @@ from aiwebbot.bot import call_grok_api, SYSTEM_PROMPT, GROK_API_KEY
 async def test_grok_api():
     """Test the Grok API integration"""
     if not GROK_API_KEY:
-        print("❌ GROK_API_KEY environment variable not set")
+        print("ERROR: GROK_API_KEY environment variable not set")
         return
 
-    print("🔑 Grok API Key found")
-    print(f"📡 System Prompt: {SYSTEM_PROMPT}")
+    print("OK: Grok API Key found")
+    print(f"System Prompt: {SYSTEM_PROMPT}")
 
     test_posts = [
         "I just launched a new startup!",
@@ -24,7 +24,7 @@ async def test_grok_api():
 
     async with aiohttp.ClientSession() as session:
         for i, post in enumerate(test_posts, 1):
-            print(f"\n🧪 Test {i}: '{post}'")
+            print(f"\nTest {i}: '{post}'")
             user_prompt = f"Generate a reply to this post: '{post}'"
 
             try:
@@ -33,9 +33,9 @@ async def test_grok_api():
                     system_prompt=SYSTEM_PROMPT,
                     user_prompt=user_prompt
                 )
-                print(f"✅ Reply: '{reply}' (len: {len(reply)})")
+                print(f"SUCCESS: Reply: '{reply}' (len: {len(reply)})")
             except Exception as e:
-                print(f"❌ Error: {e}")
+                print(f"ERROR: {e}")
 
 if __name__ == "__main__":
     asyncio.run(test_grok_api())
