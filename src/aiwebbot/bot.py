@@ -451,9 +451,12 @@ class AIWebBot:
                         else:
                             logger.warning("Failed to reply to post")
 
-                        # Instead of refreshing, just continue reading from where we left off
-                        # The page will naturally update with new posts as we scroll
-                        logger.info("Continuing with next posts in feed...")
+                        # Scroll to load new posts after successful reply
+                        logger.info("Scrolling to load new posts...")
+                        await self.scroll_to_next_post()
+
+                        # Reset post index to start fresh from newly loaded content
+                        self.current_post_index = 0
 
                         # Random delay between actions
                         delay = await self.get_random_delay()
@@ -1093,7 +1096,7 @@ class AIWebBot:
 
             # Calculate new scroll position (scroll down by viewport height)
             viewport_height = await self.page.evaluate("window.innerHeight")
-            new_scroll = current_scroll + viewport_height * 0.8  # Scroll 80% of viewport height
+            new_scroll = current_scroll + viewport_height * 1.2  # Scroll 120% of viewport height for better content loading
 
             # Smooth scroll to new position
             await self.page.evaluate(f"""
