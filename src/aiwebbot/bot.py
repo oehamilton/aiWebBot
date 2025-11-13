@@ -1,15 +1,69 @@
 """Main AI Web Bot implementation."""
 
 import asyncio
+import os
 import random
 import time
 from dataclasses import dataclass
 from typing import Optional
 
+import aiohttp
 from loguru import logger
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
 
 from .config import Config
+
+# Grok API Configuration
+GROK_API_KEY = os.getenv("GROK_API_KEY")
+GROK_API_ENDPOINT = "https://api.x.ai/v1/chat/completions"
+
+# System prompt for generating replies
+SYSTEM_PROMPT = "You are an AI assistant focused on advancing humanity toward a Type 1 civilization on the Kardashev scale. Generate concise, insightful replies (30 characters or less) that promote scientific progress, technological advancement, critical thinking, or positive societal change. Replies should be thought-provoking and actionable."
+
+
+async def call_grok_api(session, system_prompt, user_prompt, model="grok-beta", max_tokens=50, retries=3):
+    """Async call to Grok API with retry and debug"""
+    headers = {
+        "Authorization": f"Bearer {GROK_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    data = {
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        "model": model,
+        "max_tokens": max_tokens,
+        "temperature": 0.7,  # Slightly higher for creativity while maintaining relevance
+        "stream": False
+    }
+
+    for attempt in range(retries):
+        try:
+            logger.debug(f"Grok API call attempt {attempt + 1}/{retries}")
+            async with session.post(GROK_API_ENDPOINT, headers=headers, json=data) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    reply = result["choices"][0]["message"]["content"].strip()
+
+                    # Ensure reply is 30 characters or less
+                    if len(reply) > 30:
+                        reply = reply[:27] + "..."
+
+                    logger.info(f"Grok generated reply: '{reply}' (len: {len(reply)})")
+                    return reply
+                else:
+                    logger.warning(f"Grok API error {response.status}: {await response.text()}")
+
+        except Exception as e:
+            logger.warning(f"Grok API call failed (attempt {attempt + 1}): {e}")
+
+        if attempt < retries - 1:
+            await asyncio.sleep(2 ** attempt)  # Exponential backoff
+
+    logger.error("Grok API call failed after all retries")
+    return "Why?"  # Fallback to default reply
 
 
 @dataclass
@@ -35,6 +89,7 @@ class AIWebBot:
         self.running = False
         self.processed_post_ids = set()  # Track processed posts to avoid duplicates
         self.current_post_index = 0  # Track which post we're currently processing
+        self.http_session: Optional[aiohttp.ClientSession] = None  # For Grok API calls
 
     async def __aenter__(self):
         """Async context manager entry."""
@@ -72,7 +127,10 @@ class AIWebBot:
 
         self.page = await self.context.new_page()
 
-        logger.info("Browser started successfully")
+        # Initialize HTTP session for Grok API calls
+        self.http_session = aiohttp.ClientSession()
+
+        logger.info("Browser and HTTP session started successfully")
 
     async def stop(self) -> None:
         """Stop the browser and cleanup resources."""
@@ -84,6 +142,9 @@ class AIWebBot:
             await self.context.close()
         if self.browser:
             await self.browser.close()
+        if self.http_session:
+            await self.http_session.close()
+
         if self.playwright:
             await self.playwright.stop()
 
@@ -525,18 +586,27 @@ class AIWebBot:
                     # Extract post data
                     post_data = await self._extract_post_data(post_element, post_id)
                     if post_data and post_data.text.strip():
-                        # Skip posts that are replies to avoid replying to our own replies
-                        if "Why?" in post_data.text or "why?" in post_data.text:
-                            logger.info(f"SKIPPING post containing 'Why?' (likely our own reply): '{post_data.text}' by {post_data.author}")
+                        # Skip posts that are likely AI-generated replies (very short, philosophical, or common reply patterns)
+                        text_lower = post_data.text.lower().strip()
+
+                        # Skip obvious fallback replies
+                        if "why?" in text_lower and len(post_data.text.strip()) <= 10:
+                            logger.info(f"SKIPPING fallback reply 'Why?': '{post_data.text}' by {post_data.author}")
                             self.current_post_index += 1
                             continue
 
-                        # Skip posts from our own account if we can detect it
-                        # For now, just skip very short posts that might be our replies
-                        if len(post_data.text.strip()) <= 10 and post_data.text.strip().lower() in ["why?", "why"]:
-                            logger.info(f"SKIPPING very short post that looks like our reply: '{post_data.text}' by {post_data.author}")
-                            self.current_post_index += 1
-                            continue
+                        # Skip very short posts that look like AI replies (under 50 chars and no links/media)
+                        if len(post_data.text.strip()) <= 50 and not any(word in text_lower for word in ['http', 'www', '@', '#']):
+                            # Check for common AI reply patterns
+                            ai_patterns = [
+                                'think about', 'consider', 'what if', 'perhaps', 'maybe',
+                                'innovate', 'advance', 'progress', 'future', 'change',
+                                'explore', 'discover', 'learn', 'grow', 'evolve'
+                            ]
+                            if any(pattern in text_lower for pattern in ai_patterns):
+                                logger.info(f"SKIPPING likely AI-generated reply: '{post_data.text}' by {post_data.author}")
+                                self.current_post_index += 1
+                                continue
 
                         self.current_post_index += 1
                         logger.info(f"Successfully read post: '{post_data.text[:50]}...' by {post_data.author}")
@@ -664,12 +734,29 @@ class AIWebBot:
 
     async def reply_to_post(self, post: PostData) -> bool:
         """Reply to a specific post."""
-        if not self.page:
-            logger.error("Browser page not initialized")
+        if not self.page or not self.http_session:
+            logger.error("Browser page or HTTP session not initialized")
             return False
 
         try:
             logger.info(f"Attempting to reply to post: '{post.text[:50]}...' by {post.author}")
+
+            # Generate reply using Grok API
+            if not GROK_API_KEY:
+                logger.warning("GROK_API_KEY not found, using fallback reply")
+                reply_text = "Why?"
+            else:
+                # Create user prompt from post content
+                user_prompt = f"Generate a reply to this post: '{post.text[:200]}...'"
+                logger.debug(f"Calling Grok API with prompt: {user_prompt}")
+
+                reply_text = await call_grok_api(
+                    session=self.http_session,
+                    system_prompt=SYSTEM_PROMPT,
+                    user_prompt=user_prompt
+                )
+
+            logger.info(f"Using reply: '{reply_text}'")
 
             # Find the reply button within this specific post
             # We need to find the post element again and locate its reply button
@@ -836,17 +923,17 @@ class AIWebBot:
                 await asyncio.sleep(0.5)
 
                 # Enter our reply text by typing (more reliable than fill for contenteditable)
-                await reply_input.type(self.config.reply_text, delay=50)
+                await reply_input.type(reply_text, delay=50)
                 await asyncio.sleep(1)
 
                 # Verify text was entered by checking the element's text content
                 try:
                     entered_text = await reply_input.inner_text()
-                    if not entered_text or entered_text.strip() != self.config.reply_text:
-                        logger.warning(f"Text entry verification failed. Expected: '{self.config.reply_text}', Got: '{entered_text}'")
+                    if not entered_text or entered_text.strip() != reply_text:
+                        logger.warning(f"Text entry verification failed. Expected: '{reply_text}', Got: '{entered_text}'")
                         # Try fill method as fallback
                         await reply_input.fill("")
-                        await reply_input.fill(self.config.reply_text)
+                        await reply_input.fill(reply_text)
                         await asyncio.sleep(0.5)
                     else:
                         logger.info(f"Successfully entered reply text: '{entered_text}'")
