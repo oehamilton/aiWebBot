@@ -18,7 +18,7 @@ GROK_API_KEY = os.getenv("GROK_API_KEY")
 GROK_API_ENDPOINT = "https://api.x.ai/v1/chat/completions"
 
 # System prompt for generating replies
-SYSTEM_PROMPT = "You are an AI assistant focused on advancing humanity toward a Type 1 civilization on the Kardashev scale. Generate concise, insightful replies (30 characters or less) that promote scientific progress, technological advancement, critical thinking, or positive societal change. Replies should be thought-provoking and actionable."
+SYSTEM_PROMPT = "You are an AI assistant focused on advancing humanity toward a Type 1 civilization on the Kardashev scale. Generate concise, insightful replies (60 characters or less) that promote scientific progress, technological advancement, critical thinking, or positive societal change. Replies should be thought-provoking and actionable."
 
 
 async def call_grok_api(session, system_prompt, user_prompt, model="grok-3", max_tokens=50, retries=3):
@@ -47,9 +47,9 @@ async def call_grok_api(session, system_prompt, user_prompt, model="grok-3", max
                     result = await response.json()
                     reply = result["choices"][0]["message"]["content"].strip()
 
-                    # Ensure reply is 30 characters or less
-                    if len(reply) > 30:
-                        reply = reply[:27] + "..."
+                    # Ensure reply is 60 characters or less
+                    if len(reply) > 60:
+                        reply = reply[:57] + "..."
 
                     logger.info(f"Grok generated reply: '{reply}' (len: {len(reply)})")
                     return reply
@@ -151,6 +151,24 @@ class AIWebBot:
 
         self.running = False
         logger.info("AI Web Bot stopped")
+
+    async def refresh_feed(self, reason: str = "") -> None:
+        """Refresh the feed to load new posts."""
+        if not self.page:
+            logger.error("Cannot refresh feed: page not initialized")
+            return
+
+        message = "Refreshing feed"
+        if reason:
+            message += f" ({reason})"
+        logger.info(message)
+
+        try:
+            await self.page.reload()
+            await asyncio.sleep(3)
+            self.current_post_index = 0
+        except Exception as e:
+            logger.warning(f"Failed to refresh feed: {e}")
 
     async def navigate_to_twitter(self) -> bool:
         """Navigate to X/Twitter home page."""
@@ -488,7 +506,7 @@ class AIWebBot:
         finally:
             self.running = False
 
-    async def read_next_post(self) -> Optional[PostData]:
+    async def read_next_post(self, depth: int = 0) -> Optional[PostData]:
         """Read the next post in the feed."""
         if not self.page:
             logger.error("Browser page not initialized")
@@ -591,7 +609,11 @@ class AIWebBot:
                         # Skip posts that are our own recent replies
                         post_text_clean = post_data.text.strip()
                         if post_text_clean in self.recent_replies:
-                            logger.info(f"SKIPPING our own recent reply: '{post_text_clean}' by {post_data.author}")
+                            logger.info(f"Detected our own recent reply in feed: '{post_text_clean}' by {post_data.author}")
+                            if depth < 3:
+                                await self.refresh_feed("detected own reply in feed")
+                                return await self.read_next_post(depth=depth + 1)
+                            logger.warning("Maximum refresh attempts reached while avoiding own replies")
                             self.current_post_index += 1
                             continue
 
