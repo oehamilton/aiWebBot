@@ -90,6 +90,7 @@ class AIWebBot:
         self.processed_post_ids = set()  # Track processed posts to avoid duplicates
         self.current_post_index = 0  # Track which post we're currently processing
         self.http_session: Optional[aiohttp.ClientSession] = None  # For Grok API calls
+        self.recent_replies = []  # Track recent replies to avoid replying to our own posts
 
     async def __aenter__(self):
         """Async context manager entry."""
@@ -584,6 +585,13 @@ class AIWebBot:
                     # Extract post data
                     post_data = await self._extract_post_data(post_element, post_id)
                     if post_data and post_data.text.strip():
+                        # Skip posts that are our own recent replies
+                        post_text_clean = post_data.text.strip()
+                        if post_text_clean in self.recent_replies:
+                            logger.info(f"SKIPPING our own recent reply: '{post_text_clean}' by {post_data.author}")
+                            self.current_post_index += 1
+                            continue
+
                         # Skip posts that are likely AI-generated replies (very short, philosophical, or common reply patterns)
                         text_lower = post_data.text.lower().strip()
 
@@ -1055,6 +1063,13 @@ class AIWebBot:
                 # Mark this post as replied to
                 self.processed_post_ids.add(post.post_id)
                 logger.debug(f"Marked post {post.post_id} as replied to")
+
+                # Track this reply to avoid replying to our own posts
+                self.recent_replies.append(reply_text)
+                # Keep only the last 20 replies to avoid memory issues
+                if len(self.recent_replies) > 20:
+                    self.recent_replies.pop(0)
+                logger.debug(f"Added reply to tracking: '{reply_text}' (total tracked: {len(self.recent_replies)})")
 
                 await asyncio.sleep(2)  # Wait for submission to complete
                 return True
