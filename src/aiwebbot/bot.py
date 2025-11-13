@@ -575,9 +575,11 @@ class AIWebBot:
 
                     # Skip if we already replied to this post
                     if post_id in self.processed_post_ids:
-                        logger.debug(f"Skipping already replied-to post: {post_id}")
+                        logger.info(f"SKIPPING already replied-to post: {post_id}")
                         self.current_post_index += 1
                         continue
+
+                    logger.debug(f"Processing new post with ID: {post_id}")
 
                     # Extract post data
                     post_data = await self._extract_post_data(post_element, post_id)
@@ -626,43 +628,68 @@ class AIWebBot:
             return None
 
     async def _get_post_id(self, post_element, index: int) -> str:
-        """Generate a unique identifier for a post using content and attributes."""
+        """Generate a unique identifier for a post using author and content."""
         try:
-            # Try to get post content for a more unique identifier
-            post_text = ""
+            # Get author and content for stable identification
+            author = ""
+            content_hash = 0
+
             try:
+                # Try to get author name
+                author_element = await post_element.query_selector('[data-testid="User-Name"]')
+                if author_element:
+                    author = await author_element.inner_text()
+                else:
+                    # Try role="link" for author
+                    author_links = await post_element.query_selector_all('[role="link"]')
+                    for link in author_links:
+                        link_text = await link.inner_text()
+                        if '@' in link_text:
+                            author = link_text
+                            break
+            except:
+                pass
+
+            try:
+                # Get post content
                 text_element = await post_element.query_selector('[data-testid="tweetText"]')
                 if text_element:
                     post_text = await text_element.inner_text()
-                    # Use first 50 characters as part of ID (cleaned)
-                    content_part = post_text[:50].strip().replace('\n', ' ')
+                    # Clean and hash first 100 characters for stability
+                    content_part = post_text[:100].strip().replace('\n', ' ').replace('\t', ' ')
                     content_hash = hash(content_part) if content_part else 0
-                else:
-                    content_hash = 0
             except:
-                content_hash = 0
+                pass
 
-            # Try to get the post ID from various attributes
-            post_id = await post_element.get_attribute('data-testid')
-            if post_id and 'tweet' in post_id.lower():
-                return f"{post_id}_{content_hash}_{index}"
+            # Try to get timestamp for additional uniqueness
+            timestamp = ""
+            try:
+                time_element = await post_element.query_selector('time')
+                if time_element:
+                    timestamp = await time_element.get_attribute('datetime') or ""
+            except:
+                pass
 
-            # Try to get href or other identifying attributes
-            href = await post_element.get_attribute('href')
-            if href:
-                return f"href_{href}_{content_hash}_{index}"
+            # Create stable ID using author + content + timestamp
+            if author and content_hash != 0:
+                stable_id = f"{author}_{content_hash}_{timestamp[:19] if timestamp else ''}"
+                logger.debug(f"Stable post ID: {stable_id[:60]}...")
+                return stable_id
 
-            # Use content-based ID if we have content
+            # Fallback using just content if available
             if content_hash != 0:
-                return f"content_{content_hash}_{index}"
+                content_id = f"content_{content_hash}_{index}"
+                logger.debug(f"Content-based post ID: {content_id}")
+                return content_id
 
-            # Fallback to index-based ID with timestamp
-            return f"post_{index}_{int(time.time())}"
+            # Final fallback
+            fallback_id = f"fallback_{index}_{int(time.time())}"
+            logger.debug(f"Fallback post ID: {fallback_id}")
+            return fallback_id
 
         except Exception as e:
             logger.debug(f"Error generating post ID: {e}")
-            # Final fallback
-            return f"fallback_{index}_{int(time.time())}"
+            return f"error_{index}_{int(time.time())}"
 
     async def _extract_post_data(self, post_element, post_id: str) -> Optional[PostData]:
         """Extract text, author, and other data from a post element."""
