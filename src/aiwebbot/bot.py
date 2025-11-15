@@ -48,6 +48,8 @@ async def call_grok_api(session, system_prompt, user_prompt, model="grok-3", max
                 if response.status == 200:
                     result = await response.json()
                     reply = result["choices"][0]["message"]["content"].strip()
+                    ai_hyphen = '—'
+                    reply = reply.replace(ai_hyphen, ", ")
                     reply = reply + " "
                     # Ensure reply is 500 characters or less
                     if len(reply) > 500:
@@ -590,9 +592,25 @@ class AIWebBot:
                 return None
 
             # Get the post at current index (skip already processed ones)
-            while self.current_post_index < len(post_elements):
+            # Re-query elements each time to avoid stale handles after long-running sessions
+            while True:
                 try:
-                    post_element = post_elements[self.current_post_index]
+                    # Re-query elements to avoid stale handles (prevents "object has been collected" error)
+                    current_post_elements = []
+                    for selector in post_selectors:
+                        try:
+                            current_post_elements = await self.page.query_selector_all(selector)
+                            if current_post_elements and len(current_post_elements) > 0:
+                                break
+                        except Exception as e:
+                            logger.debug(f"Re-query selector '{selector}' failed: {e}")
+                            continue
+                    
+                    if not current_post_elements or self.current_post_index >= len(current_post_elements):
+                        # No more posts available
+                        break
+                    
+                    post_element = current_post_elements[self.current_post_index]
 
                     # Try to get post ID or unique identifier
                     post_id = await self._get_post_id(post_element, self.current_post_index)
@@ -650,17 +668,55 @@ class AIWebBot:
                     self.current_post_index += 1
 
                 except Exception as e:
-                    logger.warning(f"Error reading post at index {self.current_post_index}: {e}")
-                    self.current_post_index += 1
-                    continue
+                    error_msg = str(e)
+                    # Check if this is the "object has been collected" error
+                    if "collected to prevent unbounded heap growth" in error_msg or "has been collected" in error_msg:
+                        logger.warning(f"Element handle became stale (garbage collected) at index {self.current_post_index}: {e}")
+                        logger.info("Refreshing page to reset element handles...")
+                        try:
+                            await self.refresh_feed("element handle garbage collected")
+                            # Reset index and retry
+                            self.current_post_index = 0
+                            # Recursively retry reading post
+                            if depth < 2:
+                                return await self.read_next_post(depth=depth + 1)
+                            else:
+                                logger.error("Max depth reached after element collection error")
+                                return None
+                        except Exception as refresh_error:
+                            logger.error(f"Failed to refresh feed after element collection error: {refresh_error}")
+                            return None
+                    else:
+                        logger.warning(f"Error reading post at index {self.current_post_index}: {e}")
+                        self.current_post_index += 1
+                        continue
 
             # If we've processed all visible posts, try scrolling to load more
             logger.info("Reached end of visible posts, need to scroll for more")
             return None
 
         except Exception as e:
-            logger.error(f"Error reading next post: {e}")
-            return None
+            error_msg = str(e)
+            # Check if this is the "object has been collected" error
+            if "collected to prevent unbounded heap growth" in error_msg or "has been collected" in error_msg:
+                logger.warning(f"Element handle became stale (garbage collected) in read_next_post: {e}")
+                logger.info("Refreshing page to reset element handles...")
+                try:
+                    await self.refresh_feed("element handle garbage collected")
+                    # Reset index and retry
+                    self.current_post_index = 0
+                    # Recursively retry reading post
+                    if depth < 2:
+                        return await self.read_next_post(depth=depth + 1)
+                    else:
+                        logger.error("Max depth reached after element collection error")
+                        return None
+                except Exception as refresh_error:
+                    logger.error(f"Failed to refresh feed after element collection error: {refresh_error}")
+                    return None
+            else:
+                logger.error(f"Error reading next post: {e}")
+                return None
 
     async def _get_post_id(self, post_element, index: int) -> str:
         """Generate a unique identifier for a post using author and content."""
@@ -723,6 +779,11 @@ class AIWebBot:
             return fallback_id
 
         except Exception as e:
+            error_msg = str(e)
+            # Re-raise if this is the "object has been collected" error so caller can handle it
+            if "collected to prevent unbounded heap growth" in error_msg or "has been collected" in error_msg:
+                logger.warning(f"Element handle became stale in _get_post_id: {e}")
+                raise  # Re-raise so caller can refresh and retry
             logger.debug(f"Error generating post ID: {e}")
             return f"error_{index}_{int(time.time())}"
 
@@ -806,6 +867,11 @@ class AIWebBot:
             )
 
         except Exception as e:
+            error_msg = str(e)
+            # Re-raise if this is the "object has been collected" error so caller can handle it
+            if "collected to prevent unbounded heap growth" in error_msg or "has been collected" in error_msg:
+                logger.warning(f"Element handle became stale in _extract_post_data: {e}")
+                raise  # Re-raise so caller can refresh and retry
             logger.warning(f"Error extracting post data: {e}")
             return None
 
