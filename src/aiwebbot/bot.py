@@ -48,7 +48,7 @@ async def call_grok_api(session, system_prompt, user_prompt, model="grok-3", max
                 if response.status == 200:
                     result = await response.json()
                     reply = result["choices"][0]["message"]["content"].strip()
-                    reply = reply + "."
+                    reply = reply + " "
                     # Ensure reply is 500 characters or less
                     if len(reply) > 500:
                         reply = reply[:497] + "..."

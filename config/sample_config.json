@@ -1,7 +1,7 @@
 {
   "browser": {
     "headless": false,
-    "slow_mo": 9000,
+    "slow_mo": 900,
     "timeout": 30000,
     "viewport_width": 1280,
     "viewport_height": 720
