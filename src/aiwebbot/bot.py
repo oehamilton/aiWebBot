@@ -12,6 +12,7 @@ from loguru import logger
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
 
 from .config import Config
+from .prompts import PromptManager
 
 # Grok API Configuration
 GROK_API_KEY = os.getenv("GROK_API_KEY")
@@ -37,7 +38,7 @@ async def call_grok_api(session, system_prompt, user_prompt, model="grok-3", max
         ],
         "model": model,
         "max_tokens": max_tokens,
-        "temperature": 0.7,  # Slightly higher for creativity while maintaining relevance
+        "temperature": 0.75,  # Slightly higher for creativity while maintaining relevance
         "stream": False
     }
 
@@ -95,6 +96,10 @@ class AIWebBot:
         self.current_post_index = 0  # Track which post we're currently processing
         self.http_session: Optional[aiohttp.ClientSession] = None  # For Grok API calls
         self.recent_replies = []  # Track recent replies to avoid replying to our own posts
+        self.prompt_manager = PromptManager(
+            file_path=self.config.system_prompts_path,
+            reload_interval_seconds=self.config.prompts_reload_interval_seconds,
+        )
 
     async def __aenter__(self):
         """Async context manager entry."""
@@ -135,6 +140,9 @@ class AIWebBot:
         # Initialize HTTP session for Grok API calls
         self.http_session = aiohttp.ClientSession()
 
+        # Load system prompts and start periodic reload
+        await self.prompt_manager.start()
+
         logger.info("Browser and HTTP session started successfully")
 
     async def stop(self) -> None:
@@ -149,6 +157,9 @@ class AIWebBot:
             await self.browser.close()
         if self.http_session:
             await self.http_session.close()
+
+        # Stop prompt manager
+        await self.prompt_manager.stop()
 
         if self.playwright:
             await self.playwright.stop()
@@ -895,7 +906,7 @@ class AIWebBot:
 
                 reply_text = await call_grok_api(
                     session=self.http_session,
-                    system_prompt=SYSTEM_PROMPT,
+                    system_prompt=self.prompt_manager.get_random_prompt(SYSTEM_PROMPT),
                     user_prompt=user_prompt
                 )
 
