@@ -85,7 +85,7 @@ class Config(BaseModel):
 
     reply_text: str = Field(default="Why?", description="Text to reply with")
     system_prompts_path: Optional[Path] = Field(default=Path("config/system_prompts.txt"), description="Path to system prompts file")
-    prompts_reload_interval_seconds: int = Field(default=3600, description="How often to reload prompts, in seconds")
+    prompts_reload_interval_seconds: int = Field(default=1800, description="How often to reload prompts, in seconds")
 
     # Authentication credentials (optional - if not provided, manual login required)
     twitter_username: Optional[str] = Field(default=None, description="X/Twitter username for automatic login")
