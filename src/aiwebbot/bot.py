@@ -38,7 +38,7 @@ async def call_grok_api(session, system_prompt, user_prompt, model="grok-3", max
         ],
         "model": model,
         "max_tokens": max_tokens,
-        "temperature": 0.75,  # Slightly higher for creativity while maintaining relevance
+        "temperature": 0.80,  # Slightly higher for creativity while maintaining relevance
         "stream": False
     }
 
