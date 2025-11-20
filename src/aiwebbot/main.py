@@ -78,7 +78,30 @@ async def main() -> None:
 
     logger.info("Starting AI Web Bot")
     logger.info(f"Version: {__version__}")
-    logger.info(f"Configuration: {config.model_dump(exclude={'twitter': {'post_selector', 'reply_button_selector', 'reply_textarea_selector', 'reply_submit_selector'}})}")
+    
+    # Log config details (excluding sensitive info and verbose selectors)
+    config_dict = config.model_dump()
+    # Remove sensitive password
+    if 'twitter_password' in config_dict:
+        config_dict['twitter_password'] = '***HIDDEN***'
+    # Remove verbose selectors from twitter config
+    if 'twitter' in config_dict and isinstance(config_dict['twitter'], dict):
+        for selector_key in ['post_selector', 'reply_button_selector', 'reply_textarea_selector', 'reply_submit_selector']:
+            config_dict['twitter'].pop(selector_key, None)
+    logger.info(f"Configuration: {config_dict}")
+    
+    # Explicitly log authentication status
+    if config.twitter_username:
+        logger.info(f"Twitter username configured: '{config.twitter_username}' (length: {len(config.twitter_username)})")
+    else:
+        logger.warning("Twitter username NOT configured in JSON config file. Automatic login will not work.")
+        logger.warning("Please add 'twitter_username' field to your config JSON file.")
+    
+    if config.twitter_password:
+        logger.info("Twitter password configured (hidden)")
+    else:
+        logger.warning("Twitter password NOT configured in JSON config file. Automatic login will not work.")
+        logger.warning("Please add 'twitter_password' field to your config JSON file.")
 
     # Setup signal handlers for graceful shutdown
     def signal_handler(signum, frame):

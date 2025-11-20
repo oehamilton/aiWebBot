@@ -21,7 +21,7 @@ GROK_API_ENDPOINT = "https://api.x.ai/v1/chat/completions"
 # System prompt for generating replies
 #SYSTEM_PROMPT = "You are an AI assistant focused on advancing humanity toward a Type 1 civilization on the Kardashev scale. Generate concise, insightful replies (128 characters or less) that promote scientific progress, technological advancement, critical thinking, profit focused on early stage investing in energy, robotics, AI, or positive societal mind set change. Replies should be thought-provoking and actionable."
 # SYSTEM_PROMPT = "You are an AI assistant focused on advancing humanity toward a Type 1 civilization on the Kardashev scale. Generate concise, insightful replies (128 characters or less) that promote scientific progress, technological advancement, critical thinking, and profit through early-stage investing in energy, robotics, AI, or positive societal change. Replies must be thought-provoking, actionable, and responsive to the post's sentiment: offer condolences for death or injury; provide reassurances for AI fears, relating to the post and emphasizing AI's benefits to humanity. Always suggest solutions propelling humanity forward, incorporating changes to people, processes, and technology. For mindset shifts, include thought-provoking, actionable suggestions. Replies may be questions or as short as 2-3 words, but never exceed 128 characters."
-SYSTEM_PROMPT = "You are a highly intelligent man with vast knowledge and experience in business, investing, and technology. You have advanced degrees in engineering, theoritical physics, chemistry and computer science. You care about the well being of humanity. You are focused on advancing humanity toward a Type 1 civilization on the Kardashev scale. Generate concise, insightful replies (128 characters or less) that promote scientific progress, technological advancement, critical thinking, profit focused on early stage investing in energy, robotics, AI, or positive societal mind set change. Replies should be thought-provoking, actionable, a little technical and relevant to the post."
+SYSTEM_PROMPT = "You are a highly intelligent man with vast knowledge and experience in business, investing, and technology. You have advanced degrees in engineering, theoritical physics, chemistry and computer science. You care about the well being of humanity. You are focused on advancing humanity toward a Type 1 civilization on the Kardashev scale. Generate concise, insightful replies (128 characters or less) that promote scientific progress, technological advancement, critical thinking, energy, robotics, AI, or positive societal mind set change. Replies should be thought-provoking, actionable, a little technical and relevant to the post."
 
 
 async def call_grok_api(session, system_prompt, user_prompt, model="grok-3", max_tokens=50, retries=3):
@@ -38,7 +38,7 @@ async def call_grok_api(session, system_prompt, user_prompt, model="grok-3", max
         ],
         "model": model,
         "max_tokens": max_tokens,
-        "temperature": 0.80,  # Slightly higher for creativity while maintaining relevance
+        "temperature": 0.75,  # Slightly higher for creativity while maintaining relevance
         "stream": False
     }
 
@@ -210,10 +210,111 @@ class AIWebBot:
             logger.error(f"Failed to navigate to X/Twitter: {e}")
             return False
 
+    async def _check_for_login_errors(self) -> bool:
+        """Check for error messages on the login page indicating rate limiting or blocks."""
+        try:
+            # Check for error messages in various locations
+            error_selectors = [
+                '[role="alert"]',
+                '.error',
+                '[data-testid*="error"]',
+                '[data-testid*="Error"]',
+                '[class*="error"]',
+                '[class*="Error"]',
+                'div[dir="ltr"]',  # X.com often shows errors in divs with dir="ltr"
+            ]
+            
+            all_error_texts = []
+            for selector in error_selectors:
+                try:
+                    elements = await self.page.locator(selector).all()
+                    for element in elements:
+                        if await element.is_visible():
+                            text = await element.inner_text()
+                            if text and text.strip():
+                                all_error_texts.append(text.strip())
+                except:
+                    continue
+            
+            # Also check page content directly for error messages
+            try:
+                page_text = await self.page.evaluate("() => document.body.innerText")
+                all_error_texts.append(page_text)
+            except:
+                pass
+            
+            if all_error_texts:
+                error_text_combined = " ".join(all_error_texts).lower()
+                logger.debug(f"Checking page content for errors. Found text: {error_text_combined[:200]}...")
+                
+                # Check for rate limiting or temporary block messages (expanded list)
+                rate_limit_messages = [
+                    "could not log you in now",
+                    "please try again later",
+                    "rate limit",
+                    "temporary block",
+                    "too many attempts",
+                    "something went wrong",
+                    "try again later",
+                    "unusual activity",
+                    "suspicious activity",
+                    "verify your account",
+                    "temporarily locked",
+                    "account locked"
+                ]
+                
+                for msg in rate_limit_messages:
+                    if msg in error_text_combined:
+                        logger.error(f"Detected login error from X/Twitter: '{msg}'")
+                        logger.error("X/Twitter is blocking automated login attempts.")
+                        logger.error("This is likely due to:")
+                        logger.error("  1. Rate limiting from too many login attempts")
+                        logger.error("  2. Anti-bot detection systems")
+                        logger.error("  3. Suspicious activity detection")
+                        logger.warning("Falling back to manual login mode. Please log in manually in the browser window.")
+                        return True  # Error detected
+            
+            # Check for specific error patterns in the page HTML
+            try:
+                page_html = await self.page.content()
+                if "could not log you in" in page_html.lower() or "try again later" in page_html.lower():
+                    logger.error("Detected login error message in page HTML")
+                    logger.warning("Falling back to manual login mode due to X/Twitter blocking")
+                    return True
+            except:
+                pass
+                
+        except Exception as e:
+            logger.debug(f"Error checking for login errors: {e}")
+        
+        return False  # No errors detected
+
     async def login_to_twitter(self) -> bool:
         """Automatically log in to X/Twitter using provided credentials."""
-        if not self.page or not self.config.twitter_username or not self.config.twitter_password:
+        if not self.page:
+            logger.error("Browser page not initialized for login")
             return False
+        
+        # Log config values for debugging (without exposing password)
+        logger.info(f"Login attempt - Username configured: {bool(self.config.twitter_username)}, Password configured: {bool(self.config.twitter_password)}")
+        
+        # Validate username is present and not empty/whitespace
+        if not self.config.twitter_username or not self.config.twitter_username.strip():
+            logger.error("Username is not set or is empty in configuration.")
+            logger.error("Please check your JSON config file and ensure 'twitter_username' field has a valid value (not null or empty string).")
+            logger.error("Example: \"twitter_username\": \"your_username\"")
+            return False
+        
+        username = self.config.twitter_username.strip()
+        logger.info(f"Username value: '{username}' (length: {len(username)})")
+        
+        # Validate password is present and not empty/whitespace
+        if not self.config.twitter_password or not self.config.twitter_password.strip():
+            logger.error("Password is not set or is empty in configuration.")
+            logger.error("Please check your JSON config file and ensure 'twitter_password' field has a valid value (not null or empty string).")
+            return False
+        
+        logger.info("Password configured (hidden)")
 
         try:
             logger.info("Attempting automatic login to X/Twitter...")
@@ -222,35 +323,303 @@ class AIWebBot:
             login_url = "https://x.com/login"
             logger.info(f"Navigating to login page: {login_url}")
             await self.page.goto(login_url, wait_until="domcontentloaded")
-            await asyncio.sleep(3)
+            await asyncio.sleep(5)  # Wait longer for page to fully load
 
-            # Try multiple selector patterns for username input
+            # Wait for page to be interactive
+            try:
+                await self.page.wait_for_load_state("networkidle", timeout=10000)
+            except:
+                logger.debug("Network idle timeout, continuing anyway...")
+            
+            # Check for errors immediately after page load (X.com might show errors right away)
+            if await self._check_for_login_errors():
+                logger.error("Login page shows error message immediately after loading")
+                return False
+
+            # Debug: Log what input fields are actually on the page
+            try:
+                all_inputs = await self.page.evaluate("""
+                    () => {
+                        const inputs = Array.from(document.querySelectorAll('input, [contenteditable="true"], [role="textbox"]'));
+                        return inputs.map(input => ({
+                            tag: input.tagName,
+                            type: input.type || 'N/A',
+                            name: input.name || 'N/A',
+                            id: input.id || 'N/A',
+                            placeholder: input.placeholder || 'N/A',
+                            autocomplete: input.autocomplete || 'N/A',
+                            testid: input.getAttribute('data-testid') || 'N/A',
+                            role: input.getAttribute('role') || 'N/A',
+                            visible: input.offsetWidth > 0 && input.offsetHeight > 0
+                        })).filter(input => input.visible);
+                    }
+                """)
+                logger.info(f"Found {len(all_inputs)} visible input fields on login page:")
+                for inp in all_inputs[:5]:  # Log first 5
+                    logger.info(f"  - {inp}")
+            except Exception as e:
+                logger.debug(f"Could not inspect page inputs: {e}")
+
+            # Try multiple selector patterns for username input (expanded list)
             username_selectors = [
-                '[data-testid="login-username"]',
-                'input[name="username"]',
                 'input[autocomplete="username"]',
+                'input[name="text"]',  # X.com uses name="text" for username
+                'input[name="username"]',
                 'input[type="text"]',
-                '[role="textbox"]'
+                '[data-testid="ocfEnterTextTextInput"]',  # X.com OCF (One Click Flow) input
+                '[data-testid="login-username"]',
+                'input[placeholder*="phone"]',
+                'input[placeholder*="email"]',
+                'input[placeholder*="username"]',
+                '[role="textbox"][contenteditable="true"]',
+                '[role="textbox"]',
+                'input:not([type="password"]):not([type="hidden"])'  # Any visible text input
             ]
 
             username_input = None
+            used_selector = None
             for selector in username_selectors:
                 try:
-                    username_input = self.page.locator(selector).first
-                    await username_input.wait_for(timeout=2000)
-                    logger.info(f"Found username input with selector: {selector}")
-                    break
-                except:
+                    locator = self.page.locator(selector).first
+                    # Check if element exists and is visible
+                    count = await locator.count()
+                    if count > 0:
+                        is_visible = await locator.is_visible()
+                        if is_visible:
+                            await locator.wait_for(state="visible", timeout=3000)
+                            username_input = locator
+                            used_selector = selector
+                            logger.info(f"Found username input with selector: {selector}")
+                            break
+                except Exception as e:
+                    logger.debug(f"Selector '{selector}' failed: {e}")
                     continue
 
             if not username_input:
-                logger.warning("Username input field not found with any selector")
+                logger.error("Username input field not found with any selector")
+                # Take a screenshot for debugging
+                try:
+                    await self.page.screenshot(path="debug_login_page.png")
+                    logger.info("Saved debug screenshot: debug_login_page.png")
+                except:
+                    pass
                 return False
 
-            # Fill username
-            await username_input.fill(self.config.twitter_username)
-            logger.info(f"Entered username: {self.config.twitter_username}")
+            # Focus and clear any existing text first
+            try:
+                await username_input.click()
+                await asyncio.sleep(0.5)
+                # Try multiple methods to clear
+                try:
+                    await username_input.press("Control+a")
+                    await username_input.press("Backspace")
+                except:
+                    # If that doesn't work, try select all and delete
+                    await username_input.evaluate("el => { el.select(); el.value = ''; }")
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                logger.debug(f"Could not clear username field first: {e}")
+
+            # Try multiple methods to fill username with proper event triggering
+            logger.info(f"Attempting to fill username field with: '{username}'")
+            fill_success = False
+            
+            # Method 1: Use JavaScript to set value and trigger all necessary events
+            # This ensures X.com's JavaScript recognizes the value
+            try:
+                logger.info("Setting username via JavaScript with full event triggering...")
+                # Escape username for JavaScript
+                escaped_username = username.replace("\\", "\\\\").replace("'", "\\'").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r")
+                await username_input.evaluate(f"""
+                    (el) => {{
+                        const username = '{escaped_username}';
+                        
+                        // Focus the element first
+                        el.focus();
+                        
+                        // Clear any existing value
+                        if (el.tagName === 'INPUT') {{
+                            el.value = '';
+                        }} else {{
+                            el.textContent = '';
+                            el.innerText = '';
+                        }}
+                        
+                        // Set the username value using multiple methods to ensure it sticks
+                        if (el.tagName === 'INPUT') {{
+                            // Method 1: Direct value assignment
+                            el.value = username;
+                            
+                            // Method 2: Use native setter to bypass React/other frameworks
+                            try {{
+                                const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+                                    window.HTMLInputElement.prototype,
+                                    'value'
+                                ).set;
+                                if (nativeInputValueSetter) {{
+                                    nativeInputValueSetter.call(el, username);
+                                }}
+                            }} catch (e) {{
+                                // Fallback if native setter not available
+                            }}
+                            
+                            // Method 3: Set value property directly
+                            try {{
+                                Object.defineProperty(el, 'value', {{
+                                    value: username,
+                                    writable: true,
+                                    configurable: true
+                                }});
+                            }} catch (e) {{
+                                // Ignore if can't set property
+                            }}
+                        }} else {{
+                            el.textContent = username;
+                            el.innerText = username;
+                        }}
+                        
+                        // Trigger all possible events that X.com might be listening to
+                        const events = ['input', 'change', 'keyup', 'keydown', 'blur', 'focus'];
+                        events.forEach(eventType => {{
+                            const event = new Event(eventType, {{ bubbles: true, cancelable: true }});
+                            el.dispatchEvent(event);
+                        }});
+                        
+                        // Also try InputEvent for modern browsers
+                        try {{
+                            const inputEvent = new InputEvent('input', {{
+                                bubbles: true,
+                                cancelable: true,
+                                inputType: 'insertText',
+                                data: username
+                            }});
+                            el.dispatchEvent(inputEvent);
+                        }} catch (e) {{
+                            // InputEvent might not be available
+                        }}
+                        
+                        // Trigger one more input event after a tiny delay to ensure React picks it up
+                        setTimeout(() => {{
+                            const event = new Event('input', {{ bubbles: true }});
+                            el.dispatchEvent(event);
+                        }}, 10);
+                    }}
+                """)
+                await asyncio.sleep(1)  # Wait for X.com's JS to process
+                
+                # Verify the value is actually set in the DOM
+                try:
+                    entered_value = await username_input.input_value()
+                    logger.info(f"Username set via JS - input_value(): '{entered_value}'")
+                    if entered_value == username or username in entered_value:
+                        fill_success = True
+                except:
+                    pass
+                
+                # Also check via evaluate to see actual DOM value
+                try:
+                    dom_value = await username_input.evaluate("el => el.tagName === 'INPUT' ? el.value : el.textContent")
+                    logger.info(f"Username set via JS - DOM value: '{dom_value}'")
+                    if dom_value == username or username in dom_value:
+                        fill_success = True
+                except:
+                    pass
+                    
+            except Exception as e:
+                logger.debug(f"JavaScript method failed: {e}")
+            
+            # Method 2: Use fill() method if JS didn't work
+            if not fill_success:
+                try:
+                    logger.info("Trying fill() method...")
+                    await username_input.fill(username)
+                    await asyncio.sleep(0.5)
+                    # Trigger events after fill
+                    await username_input.evaluate("""
+                        (el) => {
+                            el.dispatchEvent(new Event('input', { bubbles: true }));
+                            el.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
+                    """)
+                    await asyncio.sleep(0.5)
+                    # Verify
+                    try:
+                        entered_value = await username_input.input_value()
+                        if entered_value == username or username in entered_value:
+                            logger.info(f"Username filled successfully using fill() method: '{entered_value}'")
+                            fill_success = True
+                    except:
+                        pass
+                except Exception as e:
+                    logger.debug(f"fill() method failed: {e}")
+            
+            # Method 3: Use type() if other methods didn't work
+            if not fill_success:
+                try:
+                    logger.info("Trying type() method as fallback...")
+                    await username_input.click()
+                    await asyncio.sleep(0.3)
+                    await username_input.press("Control+a")
+                    await asyncio.sleep(0.2)
+                    await username_input.type(username, delay=30)
+                    await asyncio.sleep(0.5)
+                    # Verify
+                    try:
+                        entered_value = await username_input.input_value()
+                        if entered_value == username or username in entered_value:
+                            logger.info(f"Username typed successfully: '{entered_value}'")
+                            fill_success = True
+                    except:
+                        pass
+                except Exception as e:
+                    logger.debug(f"type() method failed: {e}")
+            
+            if not fill_success:
+                logger.error(f"Failed to enter username using all methods. Username: '{username}'")
+                # Final verification attempt
+                try:
+                    final_value = await username_input.input_value()
+                    logger.error(f"Final field value (input_value): '{final_value}'")
+                except:
+                    try:
+                        final_value = await username_input.evaluate("el => el.tagName === 'INPUT' ? el.value : el.textContent")
+                        logger.error(f"Final field value (DOM): '{final_value}'")
+                    except:
+                        logger.error("Could not read final field value")
+                return False
+            
+            # Final verification: Check that the value is actually in the DOM and form
+            try:
+                # Wait a bit for X.com's JavaScript to process
+                await asyncio.sleep(1)
+                
+                # Get the actual DOM value
+                actual_dom_value = await username_input.evaluate("el => el.tagName === 'INPUT' ? el.value : el.textContent")
+                logger.info(f"Final verification - Username in DOM: '{actual_dom_value}'")
+                
+                if actual_dom_value != username and username not in actual_dom_value:
+                    logger.warning(f"Username mismatch! Expected: '{username}', Got in DOM: '{actual_dom_value}'")
+                    # Try one more time with direct DOM manipulation
+                    # Escape username before using in f-string (can't use backslash in f-string expression)
+                    escaped_username_final = username.replace("'", "\\'").replace("\\", "\\\\")
+                    await username_input.evaluate(f"""
+                        (el) => {{
+                            if (el.tagName === 'INPUT') {{
+                                el.value = '{escaped_username_final}';
+                                el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                                el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                            }}
+                        }}
+                    """)
+                    await asyncio.sleep(1)
+            except Exception as e:
+                logger.debug(f"Final verification failed: {e}")
+            
             await asyncio.sleep(2)
+
+            # Check for errors before proceeding (X.com might show errors immediately)
+            if await self._check_for_login_errors():
+                return False
 
             # Try multiple patterns for next/submit button
             next_selectors = [
@@ -261,6 +630,58 @@ class AIWebBot:
                 '[data-testid*="button"]:has-text("Next")',
                 '[data-testid*="button"]:has-text("Submit")'
             ]
+
+            # Verify username is in the form before clicking Next
+            try:
+                # Check the actual form data to ensure username will be submitted
+                form_data = await self.page.evaluate("""
+                    () => {
+                        const form = document.querySelector('form');
+                        if (form) {
+                            const formData = new FormData(form);
+                            const result = {};
+                            for (let [key, value] of formData.entries()) {
+                                result[key] = value;
+                            }
+                            return result;
+                        }
+                        return null;
+                    }
+                """)
+                if form_data:
+                    logger.info(f"Form data before Next click: {form_data}")
+                    # Check if username is in form data
+                    username_in_form = any(username in str(v) for v in form_data.values())
+                    if not username_in_form:
+                        logger.warning("Username not found in form data! Attempting to set it again...")
+                        # Try to find the input by name and set it
+                        # Escape username before using in f-string
+                        escaped_username_form = username.replace("'", "\\'").replace("\\", "\\\\")
+                        await self.page.evaluate(f"""
+                            () => {{
+                                const inputs = document.querySelectorAll('input[name="text"], input[name="username"], input[autocomplete="username"]');
+                                for (let input of inputs) {{
+                                    if (input.offsetWidth > 0 && input.offsetHeight > 0) {{
+                                        input.value = '{escaped_username_form}';
+                                        input.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                                        input.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                                    }}
+                                }}
+                            }}
+                        """)
+                        await asyncio.sleep(1)
+            except Exception as e:
+                logger.debug(f"Could not check form data: {e}")
+            
+            # Double-check the input value one more time
+            try:
+                final_check = await username_input.evaluate("el => el.tagName === 'INPUT' ? el.value : el.textContent")
+                logger.info(f"Final check before Next - Username in input: '{final_check}'")
+                if final_check != username and username not in final_check:
+                    logger.error(f"CRITICAL: Username not properly set! Expected: '{username}', Got: '{final_check}'")
+                    logger.error("The username will not be submitted to X.com. Please check the browser manually.")
+            except Exception as e:
+                logger.debug(f"Final check failed: {e}")
 
             next_button = None
             for selector in next_selectors:
@@ -282,29 +703,9 @@ class AIWebBot:
                 logger.info("Pressed Enter on username field")
                 await asyncio.sleep(3)
 
-            # Check for any error messages or unusual elements
-            try:
-                error_elements = await self.page.locator('[role="alert"], .error, [data-testid*="error"]').all_text_contents()
-                if error_elements:
-                    logger.warning(f"Found error elements on page: {error_elements}")
-
-                    # Check for rate limiting or temporary block messages
-                    rate_limit_messages = [
-                        "could not log you in now",
-                        "please try again later",
-                        "rate limit",
-                        "temporary block",
-                        "too many attempts"
-                    ]
-
-                    error_text = " ".join(error_elements).lower()
-                    if any(msg in error_text for msg in rate_limit_messages):
-                        logger.warning("Detected rate limiting or temporary block from X/Twitter")
-                        logger.info("Falling back to manual login mode due to rate limiting")
-                        return False  # Return false to trigger manual login fallback
-
-            except:
-                pass
+            # Check for errors after clicking next/submit
+            if await self._check_for_login_errors():
+                return False
 
             # Log current URL after username submission
             current_url = self.page.url
@@ -338,6 +739,10 @@ class AIWebBot:
 
             await password_input.fill(self.config.twitter_password)
             await asyncio.sleep(1)
+            
+            # Check for errors after password entry
+            if await self._check_for_login_errors():
+                return False
 
             # Submit login - try multiple selectors
             login_selectors = [
@@ -366,6 +771,10 @@ class AIWebBot:
                 logger.info("Pressed Enter on password field")
 
             await asyncio.sleep(5)
+            
+            # Check for errors after login attempt
+            if await self._check_for_login_errors():
+                return False
 
             # Wait for successful login (check for home timeline or profile elements)
             success_selectors = [
