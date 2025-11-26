@@ -1533,6 +1533,12 @@ class AIWebBot:
                     except:
                         pass
 
+                # Refresh the feed to avoid replying to our own post
+                try:
+                    await self.refresh_feed("post created - refreshing to avoid replying to own post")
+                except Exception as refresh_error:
+                    logger.warning(f"Failed to refresh feed after creating post: {refresh_error}")
+
                 return True
             except Exception as e:
                 logger.warning(f"Failed to submit post: {e}")
