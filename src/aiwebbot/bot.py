@@ -24,53 +24,69 @@ GROK_API_ENDPOINT = "https://api.x.ai/v1/chat/completions"
 SYSTEM_PROMPT = "You are a highly intelligent man with vast knowledge and experience in business, investing, and technology. You have advanced degrees in engineering, theoritical physics, chemistry and computer science. You care about the well being of humanity. You are focused on advancing humanity toward a Type 1 civilization on the Kardashev scale. Generate concise, insightful replies (128 characters or less) that promote scientific progress, technological advancement, critical thinking, profit focused on early stage investing in energy, robotics, AI, or positive societal mind set change. Replies should be thought-provoking, actionable, a little technical and relevant to the post."
 
 # System prompt for generating new posts
-POST_SYSTEM_PROMPT = "You are a highly intelligent man with vast knowledge and experience in business, investing, and technology. You have advanced degrees in engineering, theoretical physics, chemistry and computer science. You care about the well being of humanity. You are focused on advancing humanity toward a Type 1 civilization on the Kardashev scale. Generate unique, engaging posts (280 characters or less) that promote scientific progress, technological advancement, critical thinking, profit focused on early stage investing in energy, robotics, AI, or positive societal mindset change. Posts should be thought-provoking, actionable, a little technical, and original. Create standalone content that doesn't require context from other posts."
+POST_SYSTEM_PROMPT = "You are a highly intelligent and whitty man with vast knowledge and experience in business, investing, and technology. You have advanced degrees in engineering, theoretical physics, chemistry and computer science. You care about the well being of humanity. You are focused on advancing humanity toward a Type 1 civilization on the Kardashev scale. Generate unique, engaging posts (280 characters or less) that promote scientific progress, technological advancement, critical thinking, profit focused on early stage investing in energy, robotics, AI, or positive societal mindset change. Posts should be thought-provoking, actionable, a little technical, and original. Create standalone content that doesn't require context from other posts."
 
 
-async def call_grok_api(session, system_prompt, user_prompt, model="grok-3", max_tokens=50, retries=3):
-    """Async call to Grok API with retry and debug"""
+async def call_grok_api(session, system_prompt, user_prompt, model="grok-4-1-fast-reasoning", max_tokens=50, retries=3):
+    """Async call to Grok API with retry and debug. Falls back to grok-2 if grok-4-1-fast-reasoning fails."""
     headers = {
         "Authorization": f"Bearer {GROK_API_KEY}",
         "Content-Type": "application/json"
     }
 
-    data = {
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ],
-        "model": model,
-        "max_tokens": max_tokens,
-        "temperature": 0.80,  # Slightly higher for creativity while maintaining relevance
-        "stream": False
-    }
+    # Model fallback list: try latest first, then fall back to older versions
+    model_fallbacks = [model, "grok-beta", "grok-2", "grok-3"] if model not in ["grok-beta", "grok-2", "grok-3"] else [model]
+    
+    for model_to_try in model_fallbacks:
+        data = {
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            "model": model_to_try,
+            "max_tokens": max_tokens,
+            "temperature": 0.80,  # Slightly higher for creativity while maintaining relevance
+            "stream": False
+        }
 
-    for attempt in range(retries):
-        try:
-            logger.debug(f"Grok API call attempt {attempt + 1}/{retries}")
-            async with session.post(GROK_API_ENDPOINT, headers=headers, json=data) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    reply = result["choices"][0]["message"]["content"].strip()
-                    ai_hyphen = '—'
-                    reply = reply.replace(ai_hyphen, ", ")
-                    reply = reply + " "
-                    # Ensure reply is 500 characters or less
-                    if len(reply) > 500:
-                        reply = reply[:497] + "..."
+        model_not_found = False
+        for attempt in range(retries):
+            try:
+                logger.debug(f"Grok API call attempt {attempt + 1}/{retries} with model '{model_to_try}'")
+                async with session.post(GROK_API_ENDPOINT, headers=headers, json=data) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        reply = result["choices"][0]["message"]["content"].strip()
+                        ai_hyphen = '—'
+                        reply = reply.replace(ai_hyphen, ", ")
+                        reply = reply + " "
+                        # Ensure reply is 500 characters or less
+                        if len(reply) > 500:
+                            reply = reply[:497] + "..."
 
-                    logger.info(f"Grok generated reply: '{reply}' (len: {len(reply)})")
-                    return reply
-                else:
-                    logger.warning(f"Grok API error {response.status}: {await response.text()}")
+                        logger.info(f"Grok generated reply using model '{model_to_try}': '{reply}' (len: {len(reply)})")
+                        return reply
+                    else:
+                        error_text = await response.text()
+                        logger.warning(f"Grok API error {response.status} with model '{model_to_try}': {error_text}")
+                        
+                        # If model doesn't exist (404), try next fallback immediately
+                        if response.status == 404 and model_to_try != model_fallbacks[-1]:
+                            logger.info(f"Model '{model_to_try}' not available, trying fallback...")
+                            model_not_found = True
+                            break  # Break out of retry loop to try next model
 
-        except Exception as e:
-            logger.warning(f"Grok API call failed (attempt {attempt + 1}): {e}")
+            except Exception as e:
+                logger.warning(f"Grok API call failed (attempt {attempt + 1} with model '{model_to_try}'): {e}")
 
-        if attempt < retries - 1:
-            await asyncio.sleep(2 ** attempt)  # Exponential backoff
+            if attempt < retries - 1 and not model_not_found:
+                await asyncio.sleep(2 ** attempt)  # Exponential backoff
+        
+        # If model was not found (404), continue to next fallback
+        if model_not_found:
+            continue
 
-    logger.error("Grok API call failed after all retries")
+    logger.error(f"Grok API call failed after trying all models: {model_fallbacks}")
     return "Why?"  # Fallback to default reply
 
 
