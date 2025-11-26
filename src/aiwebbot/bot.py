@@ -3,6 +3,7 @@
 import asyncio
 import os
 import random
+import re
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -25,6 +26,16 @@ SYSTEM_PROMPT = "You are a highly intelligent man with vast knowledge and experi
 
 # System prompt for generating new posts
 POST_SYSTEM_PROMPT = "You are a highly intelligent and whitty man with vast knowledge and experience in business, investing, and technology. You have advanced degrees in engineering, theoretical physics, chemistry and computer science. You care about the well being of humanity. You are focused on advancing humanity toward a Type 1 civilization on the Kardashev scale. Generate unique, engaging posts (280 characters or less) that promote scientific progress, technological advancement, critical thinking, profit focused on early stage investing in energy, robotics, AI, or positive societal mindset change. Posts should be thought-provoking, actionable, a little technical, and original. Create standalone content that doesn't require context from other posts."
+
+
+def clean_generated_text(text: str) -> str:
+    """Remove character count annotations from generated text."""
+    # Remove patterns like "(87 chars)", "(87 characters)", "(87 char)", etc.
+    # Matches parentheses with numbers followed by "char" or "chars" or "characters"
+    text = re.sub(r'\s*\(\d+\s*(?:char|chars|character|characters)\)\s*$', '', text, flags=re.IGNORECASE)
+    # Also remove patterns without parentheses like "87 chars", "87 characters" at the end
+    text = re.sub(r'\s+\d+\s*(?:char|chars|character|characters)\s*$', '', text, flags=re.IGNORECASE)
+    return text.strip()
 
 
 async def call_grok_api(session, system_prompt, user_prompt, model="grok-4-1-fast-reasoning", max_tokens=50, retries=3):
@@ -57,6 +68,8 @@ async def call_grok_api(session, system_prompt, user_prompt, model="grok-4-1-fas
                     if response.status == 200:
                         result = await response.json()
                         reply = result["choices"][0]["message"]["content"].strip()
+                        # Remove character count annotations
+                        reply = clean_generated_text(reply)
                         ai_hyphen = '—'
                         reply = reply.replace(ai_hyphen, ", ")
                         reply = reply + " "
