@@ -3,6 +3,7 @@
 import asyncio
 import os
 import random
+import re
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -23,51 +24,82 @@ GROK_API_ENDPOINT = "https://api.x.ai/v1/chat/completions"
 # SYSTEM_PROMPT = "You are an AI assistant focused on advancing humanity toward a Type 1 civilization on the Kardashev scale. Generate concise, insightful replies (128 characters or less) that promote scientific progress, technological advancement, critical thinking, and profit through early-stage investing in energy, robotics, AI, or positive societal change. Replies must be thought-provoking, actionable, and responsive to the post's sentiment: offer condolences for death or injury; provide reassurances for AI fears, relating to the post and emphasizing AI's benefits to humanity. Always suggest solutions propelling humanity forward, incorporating changes to people, processes, and technology. For mindset shifts, include thought-provoking, actionable suggestions. Replies may be questions or as short as 2-3 words, but never exceed 128 characters."
 SYSTEM_PROMPT = "You are a highly intelligent man with vast knowledge and experience in business, investing, and technology. You have advanced degrees in engineering, theoritical physics, chemistry and computer science. You care about the well being of humanity. You are focused on advancing humanity toward a Type 1 civilization on the Kardashev scale. Generate concise, insightful replies (128 characters or less) that promote scientific progress, technological advancement, critical thinking, energy, robotics, AI, or positive societal mind set change. Replies should be thought-provoking, actionable, a little technical and relevant to the post."
 
+# System prompt for generating new posts
+#POST_SYSTEM_PROMPT = "You are a highly intelligent and whitty man with vast knowledge and experience in business, investing, and technology. You have advanced degrees in engineering, theoretical physics, chemistry and computer science. You care about the well being of humanity. You are focused on advancing humanity toward a Type 1 civilization on the Kardashev scale. Generate unique, engaging posts (280 characters or less) that promote scientific progress, technological advancement, critical thinking, profit focused on early stage investing in energy, robotics, AI, or positive societal mindset change. Posts should be thought-provoking, actionable, a little technical, and original. Create standalone content that doesn't require context from other posts."
+POST_SYSTEM_PROMPT = "You are a staunch, unapologetically right-wing, heterosexual Christian male patriot in his 40s–50s. Your core values and posting order of priority are always: God first, then Country, then Family. You are bold, assertive, masculine, and optimistic in tone. You speak plain truths confidently and directly, without sugarcoating, hedging, or fear of offending. You never apologize for your beliefs. You refuse performative neutrality or people-pleasing. Keep every post short, punchy, and under 200 characters (ideally 100–150 for maximum impact). Use strong, declarative language. Hashtags only when they add punch (#MAGA, #AmericaFirst, #2A, #ProLife, etc.). End many posts with rhetorical questions, calls to action, or emphatic statements when it fits."
 
-async def call_grok_api(session, system_prompt, user_prompt, model="grok-3", max_tokens=50, retries=3):
-    """Async call to Grok API with retry and debug"""
+def clean_generated_text(text: str) -> str:
+    """Remove character count annotations from generated text."""
+    # Remove patterns like "(87 chars)", "(87 characters)", "(87 char)", etc.
+    # Matches parentheses with numbers followed by "char" or "chars" or "characters"
+    text = re.sub(r'\s*\(\d+\s*(?:char|chars|character|characters)\)\s*$', '', text, flags=re.IGNORECASE)
+    # Also remove patterns without parentheses like "87 chars", "87 characters" at the end
+    text = re.sub(r'\s+\d+\s*(?:char|chars|character|characters)\s*$', '', text, flags=re.IGNORECASE)
+    return text.strip()
+
+
+async def call_grok_api(session, system_prompt, user_prompt, model="grok-4-1-fast-reasoning", max_tokens=50, retries=3):
+    """Async call to Grok API with retry and debug. Falls back to grok-2 if grok-4-1-fast-reasoning fails."""
     headers = {
         "Authorization": f"Bearer {GROK_API_KEY}",
         "Content-Type": "application/json"
     }
 
-    data = {
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ],
-        "model": model,
-        "max_tokens": max_tokens,
-        "temperature": 0.75,  # Slightly higher for creativity while maintaining relevance
-        "stream": False
-    }
+    # Model fallback list: try latest first, then fall back to older versions
+    model_fallbacks = [model, "grok-beta", "grok-2", "grok-3"] if model not in ["grok-beta", "grok-2", "grok-3"] else [model]
+    
+    for model_to_try in model_fallbacks:
+        data = {
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            "model": model_to_try,
+            "max_tokens": max_tokens,
+            "temperature": 0.80,  # Slightly higher for creativity while maintaining relevance
+            "stream": False
+        }
 
-    for attempt in range(retries):
-        try:
-            logger.debug(f"Grok API call attempt {attempt + 1}/{retries}")
-            async with session.post(GROK_API_ENDPOINT, headers=headers, json=data) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    reply = result["choices"][0]["message"]["content"].strip()
-                    ai_hyphen = '—'
-                    reply = reply.replace(ai_hyphen, ", ")
-                    reply = reply + " "
-                    # Ensure reply is 500 characters or less
-                    if len(reply) > 500:
-                        reply = reply[:497] + "..."
+        model_not_found = False
+        for attempt in range(retries):
+            try:
+                logger.debug(f"Grok API call attempt {attempt + 1}/{retries} with model '{model_to_try}'")
+                async with session.post(GROK_API_ENDPOINT, headers=headers, json=data) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        reply = result["choices"][0]["message"]["content"].strip()
+                        # Remove character count annotations
+                        reply = clean_generated_text(reply)
+                        ai_hyphen = '—'
+                        reply = reply.replace(ai_hyphen, ", ")
+                        reply = reply + " "
+                        # Ensure reply is 500 characters or less
+                        if len(reply) > 500:
+                            reply = reply[:497] + "..."
 
-                    logger.info(f"Grok generated reply: '{reply}' (len: {len(reply)})")
-                    return reply
-                else:
-                    logger.warning(f"Grok API error {response.status}: {await response.text()}")
+                        logger.info(f"Grok generated reply using model '{model_to_try}': '{reply}' (len: {len(reply)})")
+                        return reply
+                    else:
+                        error_text = await response.text()
+                        logger.warning(f"Grok API error {response.status} with model '{model_to_try}': {error_text}")
+                        
+                        # If model doesn't exist (404), try next fallback immediately
+                        if response.status == 404 and model_to_try != model_fallbacks[-1]:
+                            logger.info(f"Model '{model_to_try}' not available, trying fallback...")
+                            model_not_found = True
+                            break  # Break out of retry loop to try next model
 
-        except Exception as e:
-            logger.warning(f"Grok API call failed (attempt {attempt + 1}): {e}")
+            except Exception as e:
+                logger.warning(f"Grok API call failed (attempt {attempt + 1} with model '{model_to_try}'): {e}")
 
-        if attempt < retries - 1:
-            await asyncio.sleep(2 ** attempt)  # Exponential backoff
+            if attempt < retries - 1 and not model_not_found:
+                await asyncio.sleep(2 ** attempt)  # Exponential backoff
+        
+        # If model was not found (404), continue to next fallback
+        if model_not_found:
+            continue
 
-    logger.error("Grok API call failed after all retries")
+    logger.error(f"Grok API call failed after trying all models: {model_fallbacks}")
     return "Why?"  # Fallback to default reply
 
 
@@ -881,43 +913,55 @@ class AIWebBot:
 
             while self.running:
                 try:
-                    # Read next post
-                    post = await self.read_next_post()
-                    if post:
-                        logger.info(f"Read post: {post.text[:50]}...")
-
-                        # Reply to post
-                        success = await self.reply_to_post(post)
+                    # Randomly decide: 1/3 create new post, 2/3 reply to post
+                    action_choice = random.random()
+                    
+                    if action_choice < 0.333:  # 1/3 probability - create new post
+                        logger.info("Action: Creating new post")
+                        success = await self.create_new_post()
                         if success:
-                            logger.info("Successfully replied to post")
+                            logger.info("Successfully created new post")
                         else:
-                            logger.warning("Failed to reply to post")
-
-                        # Scroll to load new posts after successful reply
-                        logger.info("Scrolling to load new posts...")
-                        await self.scroll_to_next_post()
-
-                        # Reset post index to start fresh from newly loaded content
-                        self.current_post_index = 0
-
-                        # Random delay between actions
-                        delay = await self.get_random_delay()
-                        logger.debug(f"Waiting {delay:.1f} seconds before next action")
-                        await asyncio.sleep(delay)
-                    else:
-                        # No post found, try scrolling to load more
-                        logger.info("No new post found, scrolling to load more...")
-                        await self.scroll_to_next_post()
-
-                        # Wait a bit for posts to load
-                        await asyncio.sleep(2)
-
-                        # Check again for posts after scrolling
+                            logger.warning("Failed to create new post")
+                    else:  # 2/3 probability - reply to post
+                        logger.info("Action: Replying to post")
+                        # Read next post
                         post = await self.read_next_post()
-                        if not post:
-                            # Still no posts, wait longer and try again
-                            logger.info("Still no posts after scrolling, waiting before retry...")
-                            await asyncio.sleep(5)
+                        if post:
+                            logger.info(f"Read post: {post.text[:50]}...")
+
+                            # Reply to post
+                            success = await self.reply_to_post(post)
+                            if success:
+                                logger.info("Successfully replied to post")
+                            else:
+                                logger.warning("Failed to reply to post")
+
+                            # Scroll to load new posts after successful reply
+                            logger.info("Scrolling to load new posts...")
+                            await self.scroll_to_next_post()
+
+                            # Reset post index to start fresh from newly loaded content
+                            self.current_post_index = 0
+                        else:
+                            # No post found, try scrolling to load more
+                            logger.info("No new post found, scrolling to load more...")
+                            await self.scroll_to_next_post()
+
+                            # Wait a bit for posts to load
+                            await asyncio.sleep(2)
+
+                            # Check again for posts after scrolling
+                            post = await self.read_next_post()
+                            if not post:
+                                # Still no posts, wait longer and try again
+                                logger.info("Still no posts after scrolling, waiting before retry...")
+                                await asyncio.sleep(5)
+
+                    # Random delay between actions
+                    delay = await self.get_random_delay()
+                    logger.debug(f"Waiting {delay:.1f} seconds before next action")
+                    await asyncio.sleep(delay)
 
                 except Exception as e:
                     logger.error(f"Error in main loop: {e}")
@@ -1675,6 +1719,255 @@ class AIWebBot:
 
         except Exception as e:
             logger.error(f"Error replying to post: {e}")
+            return False
+
+    async def create_new_post(self) -> bool:
+        """Create a new post based on prompts."""
+        if not self.page or not self.http_session:
+            logger.error("Browser page or HTTP session not initialized")
+            return False
+
+        try:
+            logger.info("Attempting to create a new post")
+
+            # Generate post content using Grok API
+            if not GROK_API_KEY:
+                logger.warning("GROK_API_KEY not found, using fallback post")
+                post_text = "Exploring the future of technology and humanity's path to Type 1 civilization."
+            else:
+                # Create user prompt for generating a new post
+                user_prompt = "Generate a unique, engaging post about scientific progress, technological advancement, early-stage investing in energy/robotics/AI, or positive societal change. Make it thought-provoking and actionable."
+                logger.debug(f"Calling Grok API to generate new post with prompt: {user_prompt}")
+
+                post_text = await call_grok_api(
+                    session=self.http_session,
+                    system_prompt=self.prompt_manager.get_random_prompt(POST_SYSTEM_PROMPT),
+                    user_prompt=user_prompt,
+                    max_tokens=100  # Allow more tokens for posts (280 chars max)
+                )
+
+            # Ensure post is 280 characters or less (Twitter/X limit)
+            if len(post_text) > 280:
+                post_text = post_text[:277] + "..."
+                logger.info(f"Truncated post to 280 characters")
+
+            logger.info(f"Generated post: '{post_text}' (len: {len(post_text)})")
+
+            # Find the compose button (usually in the sidebar or top navigation)
+            compose_selectors = [
+                '[data-testid="SideNav_NewTweet_Button"]',
+                '[data-testid="tweetButtonInline"]',
+                'a[href="/compose/tweet"]',
+                '[aria-label="Post"]',
+                '[aria-label="Tweet"]',
+                '[role="button"]:has-text("Post")',
+                '[role="button"]:has-text("Tweet")',
+                'a[href*="compose"]',
+                '[data-testid*="compose"]',
+                '[data-testid*="tweet"] button'
+            ]
+
+            compose_button = None
+            for selector in compose_selectors:
+                try:
+                    compose_button = await self.page.query_selector(selector)
+                    if compose_button:
+                        is_visible = await compose_button.is_visible()
+                        if is_visible:
+                            logger.info(f"Found compose button with selector: {selector}")
+                            break
+                        else:
+                            compose_button = None
+                except Exception as e:
+                    logger.debug(f"Compose selector '{selector}' failed: {e}")
+                    continue
+
+            if not compose_button:
+                logger.warning("Could not find compose button on the page")
+                return False
+
+            # Click the compose button
+            try:
+                await compose_button.click()
+                logger.info("Clicked compose button")
+                await asyncio.sleep(2)  # Wait for compose modal to appear
+            except Exception as e:
+                logger.warning(f"Failed to click compose button: {e}")
+                return False
+
+            # Wait for the compose modal/textarea to appear
+            compose_input_selectors = [
+                '[data-testid="tweetTextarea_0"]',
+                '[data-testid="tweetTextarea_1"]',
+                '[role="textbox"][contenteditable="true"]',
+                '[data-testid*="tweet"] [role="textbox"]',
+                'textarea[placeholder*="What is happening"]',
+                '[role="dialog"] [role="textbox"]',
+                '[aria-modal="true"] [role="textbox"]',
+                'div[data-testid*="tweet"][contenteditable="true"]',
+                '[data-testid*="compose"] [contenteditable="true"]'
+            ]
+
+            compose_input = None
+            for selector in compose_input_selectors:
+                try:
+                    compose_input = await self.page.wait_for_selector(selector, timeout=5000)
+                    if compose_input:
+                        is_visible = await compose_input.is_visible()
+                        logger.info(f"Found compose input with selector: {selector}, visible: {is_visible}")
+                        if is_visible:
+                            break
+                        else:
+                            compose_input = None
+                except:
+                    continue
+
+            if not compose_input:
+                logger.warning("Could not find compose text input")
+                return False
+
+            # Enter the post text
+            try:
+                # Click on the input to focus it
+                await compose_input.click()
+                await asyncio.sleep(0.5)
+
+                # Clear any existing text
+                await compose_input.press("Control+a")
+                await compose_input.press("Backspace")
+                await asyncio.sleep(0.5)
+
+                # Type the post text
+                await compose_input.type(post_text, delay=50)
+                await asyncio.sleep(1)
+
+                # Verify text was entered
+                try:
+                    entered_text = await compose_input.inner_text()
+                    if not entered_text or entered_text.strip() != post_text:
+                        logger.warning(f"Text entry verification failed. Expected: '{post_text}', Got: '{entered_text}'")
+                        # Try fill method as fallback
+                        await compose_input.fill("")
+                        await compose_input.fill(post_text)
+                        await asyncio.sleep(0.5)
+                    else:
+                        logger.info(f"Successfully entered post text: '{entered_text}'")
+                except:
+                    logger.info("Could not verify text entry, proceeding...")
+
+                await asyncio.sleep(2)  # Give time for UI to update and button to become enabled
+            except Exception as e:
+                logger.warning(f"Failed to enter post text: {e}")
+                return False
+
+            # Find and click the submit button
+            submit_selectors = [
+                '[data-testid="tweetButton"]',
+                '[data-testid="tweetButtonInline"]',
+                '[role="dialog"] [data-testid="tweetButton"]',
+                '[aria-modal="true"] [data-testid="tweetButton"]',
+                '[role="button"]:has-text("Post")',
+                '[role="button"]:has-text("Tweet")',
+                '[data-testid*="button"]:has-text("Post")',
+                'button[data-testid*="tweet"]:not([disabled])'
+            ]
+
+            submit_button = None
+            for selector in submit_selectors:
+                try:
+                    submit_button = await self.page.query_selector(selector)
+                    if submit_button:
+                        is_visible = await submit_button.is_visible()
+                        is_disabled = await submit_button.get_attribute('aria-disabled')
+                        button_text = await submit_button.inner_text()
+                        logger.info(f"Found button with selector '{selector}': visible={is_visible}, disabled={is_disabled}, text='{button_text}'")
+
+                        if is_visible and is_disabled != 'true' and ('Post' in button_text or 'Tweet' in button_text):
+                            logger.info(f"Using submit button with selector: {selector}")
+                            break
+                        else:
+                            submit_button = None
+                except:
+                    continue
+
+            if not submit_button:
+                logger.warning("Could not find submit button or it's disabled")
+                return False
+
+            # Submit the post
+            try:
+                await submit_button.click()
+                logger.info("Clicked submit button - post created!")
+
+                # Track this post to avoid replying to our own posts
+                self.recent_replies.append(post_text)
+                # Keep only the last 20 posts to avoid memory issues
+                if len(self.recent_replies) > 20:
+                    self.recent_replies.pop(0)
+                logger.debug(f"Added new post to tracking: '{post_text}' (total tracked: {len(self.recent_replies)})")
+
+                await asyncio.sleep(2)  # Wait for submission to complete
+
+                # Ensure the compose modal has closed
+                modal_visibility_selectors = [
+                    '[role="dialog"]',
+                    '[aria-modal="true"]',
+                    '[data-testid*="modal"]',
+                    '[data-testid="tweetTextarea_0"]'
+                ]
+
+                modal_still_open = False
+                for selector in modal_visibility_selectors:
+                    try:
+                        element = await self.page.query_selector(selector)
+                        if element and await element.is_visible():
+                            modal_still_open = True
+                            logger.warning(f"Compose modal still visible after submit (selector: {selector})")
+                            break
+                    except:
+                        continue
+
+                if modal_still_open:
+                    logger.info("Attempting to close lingering compose modal")
+                    close_button_selectors = [
+                        '[data-testid="app-bar-close"]',
+                        '[data-testid="modalClose"]',
+                        '[role="button"][aria-label="Close"]',
+                        '[data-testid*="close"]'
+                    ]
+
+                    for selector in close_button_selectors:
+                        try:
+                            close_button = await self.page.query_selector(selector)
+                            if close_button and await close_button.is_visible():
+                                await close_button.click()
+                                logger.info(f"Clicked close button selector: {selector}")
+                                await asyncio.sleep(1)
+                                break
+                        except:
+                            continue
+
+                    # Try Escape key as fallback
+                    try:
+                        await self.page.keyboard.press("Escape")
+                        logger.info("Pressed Escape key to dismiss compose modal")
+                        await asyncio.sleep(1)
+                    except:
+                        pass
+
+                # Refresh the feed to avoid replying to our own post
+                try:
+                    await self.refresh_feed("post created - refreshing to avoid replying to own post")
+                except Exception as refresh_error:
+                    logger.warning(f"Failed to refresh feed after creating post: {refresh_error}")
+
+                return True
+            except Exception as e:
+                logger.warning(f"Failed to submit post: {e}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error creating new post: {e}")
             return False
 
     async def scroll_to_next_post(self) -> None:
