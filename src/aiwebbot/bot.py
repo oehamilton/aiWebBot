@@ -212,7 +212,13 @@ class AIWebBot:
 
         try:
             await self.page.reload()
+            # Wait for page to fully load and stabilize
             await asyncio.sleep(3)
+            # Wait for feed content to render
+            try:
+                await self.page.wait_for_selector('article', timeout=5000)
+            except:
+                pass  # Continue even if selector doesn't appear immediately
             self.current_post_index = 0
         except Exception as e:
             logger.warning(f"Failed to refresh feed: {e}")
@@ -1074,10 +1080,51 @@ class AIWebBot:
                         # No more posts available
                         break
                     
-                    post_element = current_post_elements[self.current_post_index]
+                    # Re-query the specific post element right before use to avoid stale handles
+                    try:
+                        post_element = current_post_elements[self.current_post_index]
+                    except Exception as e:
+                        error_msg = str(e)
+                        if "collected to prevent unbounded heap growth" in error_msg or "has been collected" in error_msg:
+                            logger.warning(f"Element handle became stale while accessing post at index {self.current_post_index}: {e}")
+                            # Re-query all elements
+                            current_post_elements = []
+                            for selector in post_selectors:
+                                try:
+                                    current_post_elements = await self.page.query_selector_all(selector)
+                                    if current_post_elements and len(current_post_elements) > 0:
+                                        break
+                                except:
+                                    continue
+                            if not current_post_elements or self.current_post_index >= len(current_post_elements):
+                                break
+                            post_element = current_post_elements[self.current_post_index]
+                        else:
+                            raise
 
                     # Try to get post ID or unique identifier
-                    post_id = await self._get_post_id(post_element, self.current_post_index)
+                    # Re-query element right before use to ensure it's fresh
+                    try:
+                        post_id = await self._get_post_id(post_element, self.current_post_index)
+                    except Exception as e:
+                        error_msg = str(e)
+                        if "collected to prevent unbounded heap growth" in error_msg or "has been collected" in error_msg:
+                            logger.warning(f"Element handle became stale in _get_post_id, re-querying...")
+                            # Re-query the element
+                            current_post_elements = []
+                            for selector in post_selectors:
+                                try:
+                                    current_post_elements = await self.page.query_selector_all(selector)
+                                    if current_post_elements and len(current_post_elements) > 0:
+                                        break
+                                except:
+                                    continue
+                            if not current_post_elements or self.current_post_index >= len(current_post_elements):
+                                break
+                            post_element = current_post_elements[self.current_post_index]
+                            post_id = await self._get_post_id(post_element, self.current_post_index)
+                        else:
+                            raise
 
                     # Skip if we already replied to this post
                     if post_id in self.processed_post_ids:
@@ -1088,7 +1135,30 @@ class AIWebBot:
                     logger.debug(f"Processing new post with ID: {post_id}")
 
                     # Extract post data
-                    post_data = await self._extract_post_data(post_element, post_id)
+                    # Re-query element right before use to ensure it's fresh
+                    try:
+                        post_data = await self._extract_post_data(post_element, post_id)
+                    except Exception as e:
+                        error_msg = str(e)
+                        if "collected to prevent unbounded heap growth" in error_msg or "has been collected" in error_msg:
+                            logger.warning(f"Element handle became stale in _extract_post_data, re-querying...")
+                            # Re-query the element
+                            current_post_elements = []
+                            for selector in post_selectors:
+                                try:
+                                    current_post_elements = await self.page.query_selector_all(selector)
+                                    if current_post_elements and len(current_post_elements) > 0:
+                                        break
+                                except:
+                                    continue
+                            if not current_post_elements or self.current_post_index >= len(current_post_elements):
+                                break
+                            post_element = current_post_elements[self.current_post_index]
+                            # Re-get post_id with fresh element
+                            post_id = await self._get_post_id(post_element, self.current_post_index)
+                            post_data = await self._extract_post_data(post_element, post_id)
+                        else:
+                            raise
                     if post_data and post_data.text.strip():
                         # Skip posts that are our own recent replies
                         post_text_clean = post_data.text.strip()
@@ -1139,16 +1209,24 @@ class AIWebBot:
                         logger.info("Refreshing page to reset element handles...")
                         try:
                             await self.refresh_feed("element handle garbage collected")
+                            # Wait a bit longer after refresh to let page stabilize
+                            await asyncio.sleep(2)
                             # Reset index and retry
                             self.current_post_index = 0
-                            # Recursively retry reading post
-                            if depth < 2:
+                            # Recursively retry reading post with increased depth limit
+                            if depth < 3:
                                 return await self.read_next_post(depth=depth + 1)
                             else:
-                                logger.error("Max depth reached after element collection error")
-                                return None
+                                logger.warning("Max depth reached after element collection error, resetting depth and retrying once more")
+                                # Reset depth and try one more time after a longer wait
+                                await asyncio.sleep(3)
+                                return await self.read_next_post(depth=0)
                         except Exception as refresh_error:
                             logger.error(f"Failed to refresh feed after element collection error: {refresh_error}")
+                            # Try one more time after error
+                            if depth < 2:
+                                await asyncio.sleep(2)
+                                return await self.read_next_post(depth=depth + 1)
                             return None
                     else:
                         logger.warning(f"Error reading post at index {self.current_post_index}: {e}")
@@ -1167,16 +1245,24 @@ class AIWebBot:
                 logger.info("Refreshing page to reset element handles...")
                 try:
                     await self.refresh_feed("element handle garbage collected")
+                    # Wait a bit longer after refresh to let page stabilize
+                    await asyncio.sleep(2)
                     # Reset index and retry
                     self.current_post_index = 0
-                    # Recursively retry reading post
-                    if depth < 2:
+                    # Recursively retry reading post with increased depth limit
+                    if depth < 3:
                         return await self.read_next_post(depth=depth + 1)
                     else:
-                        logger.error("Max depth reached after element collection error")
-                        return None
+                        logger.warning("Max depth reached after element collection error, resetting depth and retrying once more")
+                        # Reset depth and try one more time after a longer wait
+                        await asyncio.sleep(3)
+                        return await self.read_next_post(depth=0)
                 except Exception as refresh_error:
                     logger.error(f"Failed to refresh feed after element collection error: {refresh_error}")
+                    # Try one more time after error
+                    if depth < 2:
+                        await asyncio.sleep(2)
+                        return await self.read_next_post(depth=depth + 1)
                     return None
             else:
                 logger.error(f"Error reading next post: {e}")
@@ -2006,5 +2092,16 @@ class AIWebBot:
                 logger.debug(f"Scrolled from {current_scroll} to {actual_scroll}")
 
         except Exception as e:
-            logger.error(f"Error scrolling to next post: {e}")
+            error_msg = str(e)
+            # Check if this is the "object has been collected" error
+            if "collected to prevent unbounded heap growth" in error_msg or "has been collected" in error_msg:
+                logger.warning(f"Element handle became stale in scroll_to_next_post: {e}")
+                logger.info("Refreshing page to reset element handles...")
+                try:
+                    await self.refresh_feed("element handle garbage collected during scroll")
+                    await asyncio.sleep(2)
+                except Exception as refresh_error:
+                    logger.error(f"Failed to refresh feed after scroll error: {refresh_error}")
+            else:
+                logger.error(f"Error scrolling to next post: {e}")
             await asyncio.sleep(1)
