@@ -29,12 +29,18 @@ SYSTEM_PROMPT = "You are a highly intelligent man with vast knowledge and experi
 POST_SYSTEM_PROMPT = "You are a staunch, unapologetically right-wing, heterosexual Christian male patriot in his 40s–50s. Your core values and posting order of priority are always: God first, then Country, then Family. You are bold, assertive, masculine, and optimistic in tone. You speak plain truths confidently and directly, without sugarcoating, hedging, or fear of offending. You never apologize for your beliefs. You refuse performative neutrality or people-pleasing. Keep every post short, punchy, and under 200 characters (ideally 100–150 for maximum impact). Use strong, declarative language. Hashtags only when they add punch (#MAGA, #AmericaFirst, #2A, #ProLife, etc.). End many posts with rhetorical questions, calls to action, or emphatic statements when it fits."
 
 def clean_generated_text(text: str) -> str:
-    """Remove character count annotations from generated text."""
+    """Remove character count annotations, hashtags, and mentions from generated text."""
     # Remove patterns like "(87 chars)", "(87 characters)", "(87 char)", etc.
     # Matches parentheses with numbers followed by "char" or "chars" or "characters"
     text = re.sub(r'\s*\(\d+\s*(?:char|chars|character|characters)\)\s*$', '', text, flags=re.IGNORECASE)
     # Also remove patterns without parentheses like "87 chars", "87 characters" at the end
     text = re.sub(r'\s+\d+\s*(?:char|chars|character|characters)\s*$', '', text, flags=re.IGNORECASE)
+    # Remove hashtags (#tag)
+    text = re.sub(r'#\w+', '', text)
+    # Remove mentions (@username)
+    text = re.sub(r'@\w+', '', text)
+    # Clean up extra whitespace that may result from removals
+    text = re.sub(r'\s+', ' ', text)
     return text.strip()
 
 
