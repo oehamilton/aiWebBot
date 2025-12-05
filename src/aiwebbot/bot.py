@@ -6,7 +6,7 @@ import random
 import re
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 
 import aiohttp
 from loguru import logger
@@ -134,6 +134,7 @@ class AIWebBot:
         self.current_post_index = 0  # Track which post we're currently processing
         self.http_session: Optional[aiohttp.ClientSession] = None  # For Grok API calls
         self.recent_replies = []  # Track recent replies to avoid replying to our own posts
+        self.last_post_reply_time: Optional[float] = None  # Track when last post/reply was made
         self.prompt_manager = PromptManager(
             file_path=self.config.system_prompts_path,
             reload_interval_seconds=self.config.prompts_reload_interval_seconds,
@@ -905,6 +906,26 @@ class AIWebBot:
             self.config.timing.max_delay_between_actions,
         )
 
+    def can_post_or_reply(self) -> Tuple[bool, float]:
+        """Check if enough time has passed since last post/reply to allow a new one.
+        
+        Returns:
+            tuple[bool, float]: (can_post, seconds_remaining)
+                - can_post: True if cooldown has elapsed
+                - seconds_remaining: How many seconds until cooldown expires (0 if can_post is True)
+        """
+        if self.last_post_reply_time is None:
+            return True, 0.0
+        
+        elapsed = time.time() - self.last_post_reply_time
+        cooldown = self.config.timing.post_reply_cooldown_seconds
+        
+        if elapsed >= cooldown:
+            return True, 0.0
+        else:
+            remaining = cooldown - elapsed
+            return False, remaining
+
     async def run(self) -> None:
         """Main bot execution loop."""
         logger.info("Starting main bot execution loop")
@@ -925,6 +946,15 @@ class AIWebBot:
 
             while self.running:
                 try:
+                    # Check cooldown before attempting any post/reply action
+                    can_post, seconds_remaining = self.can_post_or_reply()
+                    if not can_post:
+                        minutes_remaining = seconds_remaining / 60.0
+                        logger.info(f"Cooldown active: {minutes_remaining:.1f} minutes ({seconds_remaining:.0f} seconds) remaining before next post/reply")
+                        # Wait a bit before checking again, but don't wait the full cooldown
+                        await asyncio.sleep(min(60, seconds_remaining))  # Check every minute or when cooldown expires
+                        continue
+
                     # Randomly decide: 1/3 create new post, 2/3 reply to post
                     action_choice = random.random()
                     
@@ -932,6 +962,7 @@ class AIWebBot:
                         logger.info("Action: Creating new post")
                         success = await self.create_new_post()
                         if success:
+                            self.last_post_reply_time = time.time()
                             logger.info("Successfully created new post")
                         else:
                             logger.warning("Failed to create new post")
@@ -945,6 +976,7 @@ class AIWebBot:
                             # Reply to post
                             success = await self.reply_to_post(post)
                             if success:
+                                self.last_post_reply_time = time.time()
                                 logger.info("Successfully replied to post")
                             else:
                                 logger.warning("Failed to reply to post")
