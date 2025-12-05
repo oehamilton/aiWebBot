@@ -31,8 +31,11 @@ class TimingConfig(BaseModel):
     reply_timeout: float = Field(
         default=30.0, description="Timeout for reply operations in seconds"
     )
-    post_reply_cooldown_seconds: float = Field(
-        default=900.0, description="Cooldown period between posts/replies in seconds (default: 15 minutes)"
+    min_post_reply_cooldown_seconds: float = Field(
+        default=900.0, description="Minimum cooldown period between posts/replies in seconds (default: 15 minutes)"
+    )
+    max_post_reply_cooldown_seconds: float = Field(
+        default=1800.0, description="Maximum cooldown period between posts/replies in seconds (default: 30 minutes)"
     )
 
 

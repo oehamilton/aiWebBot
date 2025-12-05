@@ -135,6 +135,7 @@ class AIWebBot:
         self.http_session: Optional[aiohttp.ClientSession] = None  # For Grok API calls
         self.recent_replies = []  # Track recent replies to avoid replying to our own posts
         self.last_post_reply_time: Optional[float] = None  # Track when last post/reply was made
+        self.current_cooldown_duration: Optional[float] = None  # Track the randomly selected cooldown duration for current cycle
         self.prompt_manager = PromptManager(
             file_path=self.config.system_prompts_path,
             reload_interval_seconds=self.config.prompts_reload_interval_seconds,
@@ -914,17 +915,24 @@ class AIWebBot:
                 - can_post: True if cooldown has elapsed
                 - seconds_remaining: How many seconds until cooldown expires (0 if can_post is True)
         """
-        if self.last_post_reply_time is None:
+        if self.last_post_reply_time is None or self.current_cooldown_duration is None:
             return True, 0.0
         
         elapsed = time.time() - self.last_post_reply_time
-        cooldown = self.config.timing.post_reply_cooldown_seconds
+        cooldown = self.current_cooldown_duration
         
         if elapsed >= cooldown:
             return True, 0.0
         else:
             remaining = cooldown - elapsed
             return False, remaining
+
+    def get_random_cooldown(self) -> float:
+        """Get a random cooldown duration between min and max values."""
+        return random.uniform(
+            self.config.timing.min_post_reply_cooldown_seconds,
+            self.config.timing.max_post_reply_cooldown_seconds,
+        )
 
     async def run(self) -> None:
         """Main bot execution loop."""
@@ -963,7 +971,9 @@ class AIWebBot:
                         success = await self.create_new_post()
                         if success:
                             self.last_post_reply_time = time.time()
-                            logger.info("Successfully created new post")
+                            self.current_cooldown_duration = self.get_random_cooldown()
+                            cooldown_minutes = self.current_cooldown_duration / 60.0
+                            logger.info(f"Successfully created new post. Next cooldown: {cooldown_minutes:.1f} minutes ({self.current_cooldown_duration:.0f} seconds)")
                         else:
                             logger.warning("Failed to create new post")
                     else:  # 2/3 probability - reply to post
@@ -977,7 +987,9 @@ class AIWebBot:
                             success = await self.reply_to_post(post)
                             if success:
                                 self.last_post_reply_time = time.time()
-                                logger.info("Successfully replied to post")
+                                self.current_cooldown_duration = self.get_random_cooldown()
+                                cooldown_minutes = self.current_cooldown_duration / 60.0
+                                logger.info(f"Successfully replied to post. Next cooldown: {cooldown_minutes:.1f} minutes ({self.current_cooldown_duration:.0f} seconds)")
                             else:
                                 logger.warning("Failed to reply to post")
 
