@@ -6,6 +6,7 @@ import random
 import re
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional, Tuple
 
 import aiohttp
@@ -26,7 +27,7 @@ SYSTEM_PROMPT = "You are a highly intelligent man with vast knowledge and experi
 
 # System prompt for generating new posts
 #POST_SYSTEM_PROMPT = "You are a highly intelligent and whitty man with vast knowledge and experience in business, investing, and technology. You have advanced degrees in engineering, theoretical physics, chemistry and computer science. You care about the well being of humanity. You are focused on advancing humanity toward a Type 1 civilization on the Kardashev scale. Generate unique, engaging posts (280 characters or less) that promote scientific progress, technological advancement, critical thinking, profit focused on early stage investing in energy, robotics, AI, or positive societal mindset change. Posts should be thought-provoking, actionable, a little technical, and original. Create standalone content that doesn't require context from other posts."
-POST_SYSTEM_PROMPT = "You are a staunch, unapologetically right-wing, heterosexual Christian male patriot in his 40s–50s. Your core values and posting order of priority are always: God first, then Country, then Family. You are bold, assertive, masculine, and optimistic in tone. You speak plain truths confidently and directly, without sugarcoating, hedging, or fear of offending. You never apologize for your beliefs. You refuse performative neutrality or people-pleasing. Keep every post short, punchy, and under 200 characters (ideally 100–150 for maximum impact). Use strong, declarative language. Hashtags only when they add punch (#MAGA, #AmericaFirst, #2A, #ProLife, etc.). End many posts with rhetorical questions, calls to action, or emphatic statements when it fits."
+POST_SYSTEM_PROMPT = "You are an unapologetically right-wing, heterosexual Christian male patriot in his 40s–50s. Your core values and posting order of priority are always: God first, then Country, then Family. You are bold, assertive, masculine, and optimistic in tone. You speak plain truths confidently and directly, without sugarcoating, hedging, or fear of offending. You never apologize for your beliefs. You refuse performative neutrality or people-pleasing. Keep every post short, punchy, and under 200 characters (ideally 100–150 for maximum impact). Use strong, declarative language. Hashtags only when they add punch (#MAGA, #AmericaFirst, #2A, #ProLife, etc.). End many posts with rhetorical questions, calls to action, or emphatic statements when it fits."
 
 def clean_generated_text(text: str) -> str:
     """Remove character count annotations, hashtags, and mentions from generated text."""
@@ -156,9 +157,22 @@ class AIWebBot:
 
         self.playwright = await async_playwright().start()
 
-        self.browser = await self.playwright.chromium.launch(
+        # Create user data directory for persistent browser context (non-incognito)
+        user_data_dir = Path.home() / ".aiwebbot" / "browser_data"
+        user_data_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Using persistent browser context at: {user_data_dir}")
+
+        # Launch browser with persistent context (non-incognito mode)
+        # This maintains cookies, localStorage, and session data between runs
+        self.context = await self.playwright.chromium.launch_persistent_context(
+            user_data_dir=str(user_data_dir),
             headless=self.config.browser.headless,
             slow_mo=self.config.browser.slow_mo,
+            viewport={
+                "width": self.config.browser.viewport_width,
+                "height": self.config.browser.viewport_height,
+            },
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             args=[
                 '--disable-blink-features=AutomationControlled',
                 '--disable-web-security',
@@ -166,16 +180,15 @@ class AIWebBot:
             ]
         )
 
-        # Create a regular browser context with user agent to appear more legitimate
-        self.context = await self.browser.new_context(
-            viewport={
-                "width": self.config.browser.viewport_width,
-                "height": self.config.browser.viewport_height,
-            },
-            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        )
+        # Get the browser instance from the persistent context
+        self.browser = self.context.browser
 
-        self.page = await self.context.new_page()
+        # Get or create the first page
+        pages = self.context.pages
+        if pages:
+            self.page = pages[0]
+        else:
+            self.page = await self.context.new_page()
 
         # Initialize HTTP session for Grok API calls
         self.http_session = aiohttp.ClientSession()
@@ -189,12 +202,14 @@ class AIWebBot:
         """Stop the browser and cleanup resources."""
         logger.info("Stopping AI Web Bot...")
 
-        if self.page:
-            await self.page.close()
+        # For persistent context, we only need to close the context
+        # (which will also close the browser and all pages)
         if self.context:
             await self.context.close()
-        if self.browser:
+        elif self.browser:
+            # Fallback: if context wasn't used, close browser directly
             await self.browser.close()
+
         if self.http_session:
             await self.http_session.close()
 
