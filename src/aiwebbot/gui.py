@@ -19,7 +19,7 @@ class BotGUI:
         self.bot = bot
         self.root = tk.Tk()
         self.root.title("AI Web Bot - Control Panel")
-        self.root.geometry("900x800")
+        self.root.geometry("900x900")
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
         # Set up GUI update callback
@@ -41,9 +41,21 @@ class BotGUI:
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(0, weight=1)
         
-        # Title
-        title_label = ttk.Label(main_frame, text="AI Web Bot Control Panel", font=("Arial", 16, "bold"))
-        title_label.grid(row=0, column=0, pady=(0, 20))
+        # Title and Bot Status
+        title_frame = ttk.Frame(main_frame)
+        title_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
+        title_frame.columnconfigure(0, weight=1)
+        
+        title_label = ttk.Label(title_frame, text="AI Web Bot Control Panel", font=("Arial", 16, "bold"))
+        title_label.grid(row=0, column=0, sticky=tk.W)
+        
+        # Bot status indicator
+        self.bot_status_label = ttk.Label(title_frame, text="Status: Running", font=("Arial", 10, "bold"), foreground="green")
+        self.bot_status_label.grid(row=0, column=1, sticky=tk.E, padx=(20, 0))
+        
+        # Stop/Start button
+        self.stop_button = ttk.Button(title_frame, text="Stop Bot", command=self.stop_bot)
+        self.stop_button.grid(row=0, column=2, sticky=tk.E, padx=(10, 0))
         
         # Status section
         status_frame = ttk.LabelFrame(main_frame, text="Status", padding="10")
@@ -83,36 +95,45 @@ class BotGUI:
         stats_frame = ttk.LabelFrame(main_frame, text="Statistics", padding="10")
         stats_frame.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=5)
         stats_frame.columnconfigure(1, weight=1)
+        stats_frame.columnconfigure(3, weight=1)
         
         ttk.Label(stats_frame, text="Total New Posts:", font=("Arial", 10, "bold")).grid(row=0, column=0, sticky=tk.W, pady=2)
         self.total_posts_label = ttk.Label(stats_frame, text="0", font=("Arial", 12))
         self.total_posts_label.grid(row=0, column=1, sticky=tk.W, padx=(10, 0), pady=2)
+        # Actual ratio display to the right of count
+        self.actual_ratio_label = ttk.Label(stats_frame, text="(N/A)", font=("Arial", 9), foreground="gray")
+        self.actual_ratio_label.grid(row=0, column=2, sticky=tk.W, padx=(20, 0), pady=2)
         
         ttk.Label(stats_frame, text="Total Replies:", font=("Arial", 10, "bold")).grid(row=1, column=0, sticky=tk.W, pady=2)
         self.total_replies_label = ttk.Label(stats_frame, text="0", font=("Arial", 12))
         self.total_replies_label.grid(row=1, column=1, sticky=tk.W, padx=(10, 0), pady=2)
         
+        # Ratio comparison indicator
+        ttk.Label(stats_frame, text="Ratio Status:", font=("Arial", 10, "bold")).grid(row=2, column=0, sticky=tk.W, pady=2)
+        self.ratio_status_label = ttk.Label(stats_frame, text="N/A", font=("Arial", 10))
+        self.ratio_status_label.grid(row=2, column=1, sticky=tk.W, padx=(10, 0), pady=2)
+        
         # System Prompts section
         prompts_frame = ttk.LabelFrame(main_frame, text="System Prompts", padding="10")
         prompts_frame.grid(row=4, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
         prompts_frame.columnconfigure(0, weight=1)
-        prompts_frame.rowconfigure(1, weight=1)
-        prompts_frame.rowconfigure(3, weight=1)
-        main_frame.rowconfigure(4, weight=1)
+        prompts_frame.rowconfigure(1, weight=0)  # Don't expand reply prompt row
+        prompts_frame.rowconfigure(3, weight=0)  # Don't expand post prompt row - use fixed height
+        main_frame.rowconfigure(4, weight=0)  # Don't let prompts frame expand, use fixed size
         
         # Reply prompt
         ttk.Label(prompts_frame, text="Reply Prompt:", font=("Arial", 10, "bold")).grid(row=0, column=0, sticky=tk.W, pady=2)
-        self.reply_prompt_text = scrolledtext.ScrolledText(prompts_frame, height=4, wrap=tk.WORD, width=80)
-        self.reply_prompt_text.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        self.reply_prompt_text = scrolledtext.ScrolledText(prompts_frame, height=3, wrap=tk.WORD, width=80)
+        self.reply_prompt_text.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=5)
         
         # Post prompt
         ttk.Label(prompts_frame, text="New Post Prompt:", font=("Arial", 10, "bold")).grid(row=2, column=0, sticky=tk.W, pady=2)
-        self.post_prompt_text = scrolledtext.ScrolledText(prompts_frame, height=4, wrap=tk.WORD, width=80)
-        self.post_prompt_text.grid(row=3, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        self.post_prompt_text = scrolledtext.ScrolledText(prompts_frame, height=6, wrap=tk.WORD, width=80)
+        self.post_prompt_text.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=5)
         
-        # Update prompts button
+        # Update prompts button - make sure it's visible with proper padding
         update_prompts_btn = ttk.Button(prompts_frame, text="Update Prompts", command=self.update_prompts)
-        update_prompts_btn.grid(row=4, column=0, pady=10)
+        update_prompts_btn.grid(row=4, column=0, pady=(15, 5), sticky=tk.W)
         
         # Cooldown settings section
         cooldown_settings_frame = ttk.LabelFrame(main_frame, text="Cooldown Settings", padding="10")
@@ -132,6 +153,23 @@ class BotGUI:
         
         update_cooldown_btn = ttk.Button(cooldown_settings_frame, text="Update Cooldown Range", command=self.update_cooldown)
         update_cooldown_btn.grid(row=0, column=4, padx=10)
+        
+        # Post to Reply Ratio section
+        ratio_frame = ttk.LabelFrame(main_frame, text="Post to Reply Ratio", padding="10")
+        ratio_frame.grid(row=6, column=0, sticky=(tk.W, tk.E), pady=5)
+        ratio_frame.columnconfigure(1, weight=1)
+        
+        ttk.Label(ratio_frame, text="New Post Probability (0.0 - 1.0):").grid(row=0, column=0, sticky=tk.W, padx=5)
+        self.post_ratio_var = tk.StringVar(value=str(self.bot.post_to_reply_ratio))
+        post_ratio_entry = ttk.Entry(ratio_frame, textvariable=self.post_ratio_var, width=15)
+        post_ratio_entry.grid(row=0, column=1, sticky=tk.W, padx=5)
+        
+        # Display current ratio as percentage
+        self.ratio_display_label = ttk.Label(ratio_frame, text="", font=("Arial", 9))
+        self.ratio_display_label.grid(row=0, column=2, sticky=tk.W, padx=10)
+        
+        update_ratio_btn = ttk.Button(ratio_frame, text="Update Ratio", command=self.update_post_ratio)
+        update_ratio_btn.grid(row=0, column=3, padx=10)
         
     def update_display(self):
         """Update all display elements with current bot state."""
@@ -161,6 +199,43 @@ class BotGUI:
         self.total_posts_label.config(text=str(self.bot.total_new_posts))
         self.total_replies_label.config(text=str(self.bot.total_replies))
         
+        # Calculate and display actual ratio (to the right of counts)
+        total_actions = self.bot.total_new_posts + self.bot.total_replies
+        if total_actions > 0:
+            actual_post_ratio = self.bot.total_new_posts / total_actions
+            actual_reply_ratio = self.bot.total_replies / total_actions
+            self.actual_ratio_label.config(
+                text=f"({actual_post_ratio * 100:.1f}% posts, {actual_reply_ratio * 100:.1f}% replies)",
+                foreground="black"
+            )
+            
+            # Compare actual ratio to desired ratio and show status
+            if hasattr(self.bot, 'post_to_reply_ratio'):
+                desired_ratio = self.bot.post_to_reply_ratio
+                ratio_diff = actual_post_ratio - desired_ratio
+                
+                # Determine what action should be taken
+                if abs(ratio_diff) < 0.05:  # Within 5% tolerance
+                    self.ratio_status_label.config(
+                        text="Balanced (within tolerance)",
+                        foreground="green"
+                    )
+                elif ratio_diff > 0.05:  # Too many posts, need more replies
+                    self.ratio_status_label.config(
+                        text=f"Need more replies (diff: {ratio_diff * 100:+.1f}%)",
+                        foreground="orange"
+                    )
+                else:  # Too many replies, need more posts
+                    self.ratio_status_label.config(
+                        text=f"Need more posts (diff: {ratio_diff * 100:+.1f}%)",
+                        foreground="orange"
+                    )
+            else:
+                self.ratio_status_label.config(text="N/A", foreground="gray")
+        else:
+            self.actual_ratio_label.config(text="(No actions yet)", foreground="gray")
+            self.ratio_status_label.config(text="N/A", foreground="gray")
+        
         # Update cooldown timer
         can_post, seconds_remaining = self.bot.can_post_or_reply()
         if can_post:
@@ -178,6 +253,23 @@ class BotGUI:
         
         # Update prompts display (read from file)
         self.update_prompts_display()
+        
+        # Update bot status
+        if hasattr(self.bot, 'running'):
+            if self.bot.running:
+                self.bot_status_label.config(text="Status: Running", foreground="green")
+                self.stop_button.config(text="Stop Bot", state="normal")
+            else:
+                self.bot_status_label.config(text="Status: Stopped", foreground="red")
+                self.stop_button.config(text="Bot Stopped", state="disabled")
+        
+        # Update post-to-reply ratio display
+        if hasattr(self.bot, 'post_to_reply_ratio'):
+            ratio = self.bot.post_to_reply_ratio
+            post_percent = ratio * 100
+            reply_percent = (1.0 - ratio) * 100
+            self.ratio_display_label.config(text=f"Current: {post_percent:.1f}% new posts, {reply_percent:.1f}% replies")
+            self.post_ratio_var.set(str(ratio))
         
     def update_prompts_display(self):
         """Update the prompts display from the prompts file."""
@@ -327,6 +419,65 @@ class BotGUI:
         except Exception as e:
             logger.error(f"Failed to update prompts: {e}")
             messagebox.showerror("Error", f"Failed to update prompts: {e}")
+    
+    def stop_bot(self):
+        """Stop the bot gracefully."""
+        if messagebox.askyesno("Stop Bot", "Are you sure you want to stop the bot?\nThis will stop all automation."):
+            try:
+                # Set running flag to False to stop the main loop
+                self.bot.running = False
+                
+                # Schedule async stop in the event loop
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # Create a task to stop the bot
+                        asyncio.create_task(self.bot.stop())
+                    else:
+                        # If no running loop, run stop directly
+                        asyncio.run(self.bot.stop())
+                except RuntimeError:
+                    # No event loop, create one
+                    try:
+                        asyncio.run(self.bot.stop())
+                    except Exception as stop_error:
+                        logger.warning(f"Could not stop bot gracefully: {stop_error}")
+                        # At least set running to False
+                        self.bot.running = False
+                except Exception as stop_error:
+                    logger.warning(f"Could not stop bot gracefully: {stop_error}")
+                    # At least set running to False
+                    self.bot.running = False
+                
+                logger.info("Bot stop requested from GUI")
+                messagebox.showinfo("Bot Stopped", "The bot has been stopped.")
+                
+            except Exception as e:
+                logger.error(f"Failed to stop bot: {e}")
+                messagebox.showerror("Error", f"Failed to stop bot: {e}")
+    
+    def update_post_ratio(self):
+        """Update the post-to-reply ratio from GUI value."""
+        try:
+            ratio = float(self.post_ratio_var.get())
+            
+            if ratio < 0.0 or ratio > 1.0:
+                messagebox.showerror("Error", "Ratio must be between 0.0 and 1.0")
+                return
+            
+            # Update bot ratio
+            self.bot.post_to_reply_ratio = ratio
+            
+            post_percent = ratio * 100
+            reply_percent = (1.0 - ratio) * 100
+            logger.info(f"Updated post-to-reply ratio: {ratio} ({post_percent:.1f}% new posts, {reply_percent:.1f}% replies)")
+            messagebox.showinfo("Success", f"Post-to-reply ratio updated to {post_percent:.1f}% new posts, {reply_percent:.1f}% replies")
+            
+        except ValueError:
+            messagebox.showerror("Error", "Invalid ratio value. Please enter a number between 0.0 and 1.0.")
+        except Exception as e:
+            logger.error(f"Failed to update post-to-reply ratio: {e}")
+            messagebox.showerror("Error", f"Failed to update ratio: {e}")
     
     def update_cooldown(self):
         """Update the cooldown range from GUI values."""

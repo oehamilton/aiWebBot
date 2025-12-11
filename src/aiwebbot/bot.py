@@ -149,6 +149,8 @@ class AIWebBot:
         self.last_reply_text: Optional[str] = None
         self.last_reply_timestamp: Optional[str] = None
         self.gui_callback = None  # Callback function for GUI updates
+        # Post to reply ratio (0.0 to 1.0, where 0.333 means 33.3% new posts, 66.7% replies)
+        self.post_to_reply_ratio: float = 0.333  # Default: 1/3 posts, 2/3 replies
 
     async def __aenter__(self):
         """Async context manager entry."""
@@ -986,10 +988,37 @@ class AIWebBot:
                         await asyncio.sleep(min(60, seconds_remaining))  # Check every minute or when cooldown expires
                         continue
 
-                    # Randomly decide: 1/3 create new post, 2/3 reply to post
+                    # Calculate actual ratio and adjust probability to maintain desired ratio
+                    total_actions = self.total_new_posts + self.total_replies
+                    if total_actions > 0:
+                        actual_post_ratio = self.total_new_posts / total_actions
+                        desired_ratio = self.post_to_reply_ratio
+                        
+                        # Adjust probability based on how far off we are from desired ratio
+                        # If we have too many posts (actual > desired), reduce post probability
+                        # If we have too many replies (actual < desired), increase post probability
+                        ratio_diff = actual_post_ratio - desired_ratio
+                        
+                        # Adjust probability with a factor (0.0 to 1.0) based on how far off we are
+                        # Use a scaling factor to gradually correct (max adjustment of 0.3)
+                        adjustment_factor = min(abs(ratio_diff) * 2.0, 0.3)  # Cap at 30% adjustment
+                        
+                        if ratio_diff > 0:  # Too many posts, reduce post probability
+                            post_probability = max(desired_ratio - adjustment_factor, 0.0)
+                            logger.debug(f"Actual ratio ({actual_post_ratio:.2f}) > desired ({desired_ratio:.2f}), reducing post probability to {post_probability:.2f}")
+                        elif ratio_diff < 0:  # Too many replies, increase post probability
+                            post_probability = min(desired_ratio + adjustment_factor, 1.0)
+                            logger.debug(f"Actual ratio ({actual_post_ratio:.2f}) < desired ({desired_ratio:.2f}), increasing post probability to {post_probability:.2f}")
+                        else:  # Close to desired ratio, use desired ratio
+                            post_probability = desired_ratio
+                    else:
+                        # No actions yet, use desired ratio
+                        post_probability = self.post_to_reply_ratio
+                    
+                    # Randomly decide based on adjusted probability
                     action_choice = random.random()
                     
-                    if action_choice < 0.333:  # 1/3 probability - create new post
+                    if action_choice < post_probability:  # Create new post based on adjusted ratio
                         logger.info("Action: Creating new post")
                         success = await self.create_new_post()
                         if success:
