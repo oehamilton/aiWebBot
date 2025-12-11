@@ -150,7 +150,8 @@ class AIWebBot:
         self.last_reply_timestamp: Optional[str] = None
         self.gui_callback = None  # Callback function for GUI updates
         # Post to reply ratio (0.0 to 1.0, where 0.333 means 33.3% new posts, 66.7% replies)
-        self.post_to_reply_ratio: float = 0.333  # Default: 1/3 posts, 2/3 replies
+        # Load from config if available, otherwise use default
+        self.post_to_reply_ratio: float = getattr(config, 'post_to_reply_ratio', 0.333)
 
     async def __aenter__(self):
         """Async context manager entry."""

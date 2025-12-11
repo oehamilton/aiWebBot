@@ -14,9 +14,10 @@ from loguru import logger
 class BotGUI:
     """GUI interface for monitoring and controlling the AI Web Bot."""
 
-    def __init__(self, bot):
+    def __init__(self, bot, config_path=None):
         """Initialize the GUI with a reference to the bot."""
         self.bot = bot
+        self.config_path = config_path  # Store config file path for saving
         self.root = tk.Tk()
         self.root.title("AI Web Bot - Control Panel")
         self.root.geometry("900x900")
@@ -128,7 +129,7 @@ class BotGUI:
         
         # Post prompt
         ttk.Label(prompts_frame, text="New Post Prompt:", font=("Arial", 10, "bold")).grid(row=2, column=0, sticky=tk.W, pady=2)
-        self.post_prompt_text = scrolledtext.ScrolledText(prompts_frame, height=6, wrap=tk.WORD, width=80)
+        self.post_prompt_text = scrolledtext.ScrolledText(prompts_frame, height=3, wrap=tk.WORD, width=80)
         self.post_prompt_text.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=5)
         
         # Update prompts button - make sure it's visible with proper padding
@@ -161,8 +162,8 @@ class BotGUI:
         
         ttk.Label(ratio_frame, text="New Post Probability (0.0 - 1.0):").grid(row=0, column=0, sticky=tk.W, padx=5)
         self.post_ratio_var = tk.StringVar(value=str(self.bot.post_to_reply_ratio))
-        post_ratio_entry = ttk.Entry(ratio_frame, textvariable=self.post_ratio_var, width=15)
-        post_ratio_entry.grid(row=0, column=1, sticky=tk.W, padx=5)
+        self.post_ratio_entry = ttk.Entry(ratio_frame, textvariable=self.post_ratio_var, width=15)
+        self.post_ratio_entry.grid(row=0, column=1, sticky=tk.W, padx=5)
         
         # Display current ratio as percentage
         self.ratio_display_label = ttk.Label(ratio_frame, text="", font=("Arial", 9))
@@ -269,7 +270,9 @@ class BotGUI:
             post_percent = ratio * 100
             reply_percent = (1.0 - ratio) * 100
             self.ratio_display_label.config(text=f"Current: {post_percent:.1f}% new posts, {reply_percent:.1f}% replies")
-            self.post_ratio_var.set(str(ratio))
+            # Only update the entry field if it doesn't have focus (user isn't editing it)
+            if not hasattr(self, 'post_ratio_entry') or not self.post_ratio_entry.focus_get() == self.post_ratio_entry:
+                self.post_ratio_var.set(str(ratio))
         
     def update_prompts_display(self):
         """Update the prompts display from the prompts file."""
@@ -356,12 +359,14 @@ class BotGUI:
                     from .bot import POST_SYSTEM_PROMPT
                     post_prompt = POST_SYSTEM_PROMPT
             
-            # Update text widgets
-            self.reply_prompt_text.delete(1.0, tk.END)
-            self.reply_prompt_text.insert(1.0, reply_prompt.strip())
+            # Update text widgets only if they don't have focus (user isn't editing them)
+            if not hasattr(self, 'reply_prompt_text') or not self.reply_prompt_text.focus_get() == self.reply_prompt_text:
+                self.reply_prompt_text.delete(1.0, tk.END)
+                self.reply_prompt_text.insert(1.0, reply_prompt.strip())
             
-            self.post_prompt_text.delete(1.0, tk.END)
-            self.post_prompt_text.insert(1.0, post_prompt.strip())
+            if not hasattr(self, 'post_prompt_text') or not self.post_prompt_text.focus_get() == self.post_prompt_text:
+                self.post_prompt_text.delete(1.0, tk.END)
+                self.post_prompt_text.insert(1.0, post_prompt.strip())
         except Exception as e:
             logger.debug(f"Failed to update prompts display: {e}")
     
@@ -420,6 +425,17 @@ class BotGUI:
             logger.error(f"Failed to update prompts: {e}")
             messagebox.showerror("Error", f"Failed to update prompts: {e}")
     
+    def _save_config(self):
+        """Save the current config to file if config path is available."""
+        if self.config_path:
+            try:
+                self.bot.config.to_file(self.config_path)
+                logger.info(f"Configuration saved to {self.config_path}")
+            except Exception as e:
+                logger.warning(f"Failed to save config to {self.config_path}: {e}")
+        else:
+            logger.debug("No config file path available, skipping config save")
+    
     def stop_bot(self):
         """Stop the bot gracefully."""
         if messagebox.askyesno("Stop Bot", "Are you sure you want to stop the bot?\nThis will stop all automation."):
@@ -467,6 +483,11 @@ class BotGUI:
             
             # Update bot ratio
             self.bot.post_to_reply_ratio = ratio
+            # Update config
+            self.bot.config.post_to_reply_ratio = ratio
+            
+            # Save config to file if path is available
+            self._save_config()
             
             post_percent = ratio * 100
             reply_percent = (1.0 - ratio) * 100
@@ -497,6 +518,9 @@ class BotGUI:
             self.bot.config.timing.min_post_reply_cooldown_seconds = min_cooldown
             self.bot.config.timing.max_post_reply_cooldown_seconds = max_cooldown
             
+            # Save config to file if path is available
+            self._save_config()
+            
             logger.info(f"Updated cooldown range: {min_cooldown}s - {max_cooldown}s")
             messagebox.showinfo("Success", f"Cooldown range updated to {min_cooldown}s - {max_cooldown}s")
             
@@ -521,10 +545,10 @@ class BotGUI:
         self.root.mainloop()
 
 
-def run_gui(bot):
+def run_gui(bot, config_path=None):
     """Run the GUI in a separate thread."""
     def gui_thread():
-        gui = BotGUI(bot)
+        gui = BotGUI(bot, config_path=config_path)
         gui.run()
     
     thread = threading.Thread(target=gui_thread, daemon=True)

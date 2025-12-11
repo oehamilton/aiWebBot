@@ -128,7 +128,7 @@ async def main() -> None:
         if args.gui:
             from .gui import run_gui
             logger.info("Launching GUI interface...")
-            gui_thread = run_gui(bot)
+            gui_thread = run_gui(bot, config_path=args.config)
         
         # Run bot
         await bot.run()
