@@ -2,7 +2,7 @@
 
 import asyncio
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from loguru import logger
 import random
 
@@ -14,6 +14,8 @@ class PromptManager:
 		self.file_path = file_path
 		self.reload_interval_seconds = reload_interval_seconds
 		self._prompts: List[str] = []
+		self._reply_prompts: List[str] = []
+		self._post_prompts: List[str] = []
 		self._last_mtime: Optional[float] = None
 		self._task: Optional[asyncio.Task] = None
 		self._lock = asyncio.Lock()
@@ -33,11 +35,24 @@ class PromptManager:
 				pass
 			self._task = None
 
-	def get_random_prompt(self, fallback: str) -> str:
-		"""Get a random prompt from the loaded list, or fallback if empty."""
-		if not self._prompts:
-			return fallback
-		return random.choice(self._prompts)
+	def get_random_prompt(self, fallback: str, prompt_type: str = "general") -> str:
+		"""Get a random prompt from the loaded list, or fallback if empty.
+		
+		Args:
+			fallback: Default prompt to use if no prompts are loaded
+			prompt_type: Type of prompt to get - "reply", "post", or "general" (default)
+		"""
+		if prompt_type == "reply":
+			if self._reply_prompts:
+				return random.choice(self._reply_prompts)
+		elif prompt_type == "post":
+			if self._post_prompts:
+				return random.choice(self._post_prompts)
+		
+		# Fallback to general prompts list or fallback
+		if self._prompts:
+			return random.choice(self._prompts)
+		return fallback
 
 	async def _reload_loop(self) -> None:
 		"""Periodically check for changes and reload prompts."""
@@ -62,28 +77,103 @@ class PromptManager:
 			if self._last_mtime is not None and current_mtime == self._last_mtime:
 				return
 
-			new_prompts = self._read_prompts_from_file(self.file_path)
+			new_prompts, new_reply_prompts, new_post_prompts = self._read_prompts_from_file(self.file_path)
 			async with self._lock:
 				self._prompts = new_prompts
+				self._reply_prompts = new_reply_prompts
+				self._post_prompts = new_post_prompts
 				self._last_mtime = current_mtime
 
-			logger.info(f"Loaded {len(new_prompts)} system prompt(s) from {self.file_path}")
+			total = len(new_prompts) + len(new_reply_prompts) + len(new_post_prompts)
+			logger.info(f"Loaded {total} system prompt(s) from {self.file_path} ({len(new_reply_prompts)} reply, {len(new_post_prompts)} post, {len(new_prompts)} general)")
 		except Exception as e:
 			logger.warning(f"Failed to load system prompts: {e}")
 
-	def _read_prompts_from_file(self, path: Path) -> List[str]:
-		"""Read and parse prompts from a text file (one prompt per line). Lines starting with '#' are ignored."""
+	def _read_prompts_from_file(self, path: Path) -> Tuple[List[str], List[str], List[str]]:
+		"""Read and parse prompts from a text file.
+		
+		Supports section-based prompts:
+		- Lines starting with '# Reply prompt' start the reply prompts section
+		- Lines starting with '# Post prompt' start the post prompts section
+		- Other lines starting with '#' are ignored
+		- Empty lines separate prompts
+		
+		Returns:
+			Tuple of (general_prompts, reply_prompts, post_prompts)
+		"""
 		with path.open("r", encoding="utf-8") as f:
-			lines = f.readlines()
+			content = f.read()
 
-		prompts: List[str] = []
+		general_prompts: List[str] = []
+		reply_prompts: List[str] = []
+		post_prompts: List[str] = []
+		
+		current_section = "general"  # general, reply, or post
+		current_prompt = []
+		
+		lines = content.split('\n')
 		for line in lines:
-			line = line.strip()
-			if not line:
+			line_stripped = line.strip()
+			
+			# Check for section markers
+			if line_stripped.lower().startswith("# reply prompt"):
+				# Save current prompt if any
+				if current_prompt:
+					prompt_text = '\n'.join(current_prompt).strip()
+					if prompt_text:
+						if current_section == "reply":
+							reply_prompts.append(prompt_text)
+						elif current_section == "post":
+							post_prompts.append(prompt_text)
+						else:
+							general_prompts.append(prompt_text)
+					current_prompt = []
+				current_section = "reply"
 				continue
-			if line.startswith("#"):
+			elif line_stripped.lower().startswith("# post prompt"):
+				# Save current prompt if any
+				if current_prompt:
+					prompt_text = '\n'.join(current_prompt).strip()
+					if prompt_text:
+						if current_section == "reply":
+							reply_prompts.append(prompt_text)
+						elif current_section == "post":
+							post_prompts.append(prompt_text)
+						else:
+							general_prompts.append(prompt_text)
+					current_prompt = []
+				current_section = "post"
 				continue
-			prompts.append(line)
-		return prompts
+			elif line_stripped.startswith("#"):
+				# Comment line, ignore
+				continue
+			elif not line_stripped:
+				# Empty line - end of current prompt if we have content
+				if current_prompt:
+					prompt_text = '\n'.join(current_prompt).strip()
+					if prompt_text:
+						if current_section == "reply":
+							reply_prompts.append(prompt_text)
+						elif current_section == "post":
+							post_prompts.append(prompt_text)
+						else:
+							general_prompts.append(prompt_text)
+					current_prompt = []
+			else:
+				# Content line
+				current_prompt.append(line)
+		
+		# Don't forget the last prompt
+		if current_prompt:
+			prompt_text = '\n'.join(current_prompt).strip()
+			if prompt_text:
+				if current_section == "reply":
+					reply_prompts.append(prompt_text)
+				elif current_section == "post":
+					post_prompts.append(prompt_text)
+				else:
+					general_prompts.append(prompt_text)
+		
+		return general_prompts, reply_prompts, post_prompts
 
 

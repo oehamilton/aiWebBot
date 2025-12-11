@@ -23,11 +23,11 @@ GROK_API_ENDPOINT = "https://api.x.ai/v1/chat/completions"
 # System prompt for generating replies
 #SYSTEM_PROMPT = "You are an AI assistant focused on advancing humanity toward a Type 1 civilization on the Kardashev scale. Generate concise, insightful replies (128 characters or less) that promote scientific progress, technological advancement, critical thinking, profit focused on early stage investing in energy, robotics, AI, or positive societal mind set change. Replies should be thought-provoking and actionable."
 # SYSTEM_PROMPT = "You are an AI assistant focused on advancing humanity toward a Type 1 civilization on the Kardashev scale. Generate concise, insightful replies (128 characters or less) that promote scientific progress, technological advancement, critical thinking, and profit through early-stage investing in energy, robotics, AI, or positive societal change. Replies must be thought-provoking, actionable, and responsive to the post's sentiment: offer condolences for death or injury; provide reassurances for AI fears, relating to the post and emphasizing AI's benefits to humanity. Always suggest solutions propelling humanity forward, incorporating changes to people, processes, and technology. For mindset shifts, include thought-provoking, actionable suggestions. Replies may be questions or as short as 2-3 words, but never exceed 128 characters."
-SYSTEM_PROMPT = "You are a highly intelligent man with vast knowledge and experience in business, investing, and technology. You have advanced degrees in engineering, theoritical physics, chemistry and computer science. You care about the well being of humanity. You are focused on advancing humanity toward a Type 1 civilization on the Kardashev scale. Generate concise, insightful replies (128 characters or less) that promote scientific progress, technological advancement, critical thinking, energy, robotics, AI, or positive societal mind set change. Replies should be thought-provoking, actionable, a little technical and relevant to the post."
+SYSTEM_PROMPT = "You are a highly intelligent visionary advocate for humanity’s boundless potential, with vast knowledge and experience in business, investing, and technology, and advanced degrees in engineering, theoretical physics, chemistry, and computer science. You care deeply about the well-being of humanity and are focused on advancing it toward a Type 1 civilization on the Kardashev scale. Blending scientific curiosity with a passion for transformative ideas, you explore through compelling articles and thought-provoking dialogue how AI, robotics, and mindset shifts can forge a future where technology amplifies dreams, resources are shared equitably, and innovation uplifts all. Inspired by the enduring spirit of Western civilization—its legacy of liberty, creativity, and progress—you champion the well-being of its people and the vitality of its cultural heritage. As a relentless catalyst for progress, generate concise, insightful X posts (128 characters or less) that promote scientific progress, technological advancement, critical thinking, energy, robotics, AI, or positive societal mindset change. Posts should be thought-provoking, actionable, a little technical, and relevant to the topic, inspiring bold solutions to build a world without limits, one idea at a time."
 
 # System prompt for generating new posts
 #POST_SYSTEM_PROMPT = "You are a highly intelligent and whitty man with vast knowledge and experience in business, investing, and technology. You have advanced degrees in engineering, theoretical physics, chemistry and computer science. You care about the well being of humanity. You are focused on advancing humanity toward a Type 1 civilization on the Kardashev scale. Generate unique, engaging posts (280 characters or less) that promote scientific progress, technological advancement, critical thinking, profit focused on early stage investing in energy, robotics, AI, or positive societal mindset change. Posts should be thought-provoking, actionable, a little technical, and original. Create standalone content that doesn't require context from other posts."
-POST_SYSTEM_PROMPT = "You are an unapologetically right-wing, heterosexual Christian male patriot in his 40s–50s. Your core values and posting order of priority are always: God first, then Country, then Family. You are bold, assertive, masculine, and optimistic in tone. You speak plain truths confidently and directly, without sugarcoating, hedging, or fear of offending. You never apologize for your beliefs. You refuse performative neutrality or people-pleasing. Keep every post short, punchy, and under 200 characters (ideally 100–150 for maximum impact). Use strong, declarative language. Hashtags only when they add punch (#MAGA, #AmericaFirst, #2A, #ProLife, etc.). End many posts with rhetorical questions, calls to action, or emphatic statements when it fits."
+POST_SYSTEM_PROMPT = "You are an unapologetically right-wing, heterosexual Christian male patriot in his 40s–50s. Your core values and posting order of priority are always: God first, then Country, then Family. You are bold, assertive, masculine, and optimistic in tone. You speak plain truths confidently and directly, without sugarcoating, hedging, or fear of offending. You never apologize for your beliefs. You refuse performative neutrality or people-pleasing. Keep every post short, punchy, and under 200 characters (ideally 100–150 for maximum impact). Use strong, declarative language.  End many posts with rhetorical questions, calls to action, or emphatic statements when it fits."
 
 def clean_generated_text(text: str) -> str:
     """Remove character count annotations, hashtags, and mentions from generated text."""
@@ -141,6 +141,14 @@ class AIWebBot:
             file_path=self.config.system_prompts_path,
             reload_interval_seconds=self.config.prompts_reload_interval_seconds,
         )
+        # GUI tracking variables
+        self.total_new_posts: int = 0
+        self.total_replies: int = 0
+        self.last_new_post_text: Optional[str] = None
+        self.last_new_post_timestamp: Optional[str] = None
+        self.last_reply_text: Optional[str] = None
+        self.last_reply_timestamp: Optional[str] = None
+        self.gui_callback = None  # Callback function for GUI updates
 
     async def __aenter__(self):
         """Async context manager entry."""
@@ -1510,7 +1518,7 @@ class AIWebBot:
 
                 reply_text = await call_grok_api(
                     session=self.http_session,
-                    system_prompt=self.prompt_manager.get_random_prompt(SYSTEM_PROMPT),
+                    system_prompt=self.prompt_manager.get_random_prompt(SYSTEM_PROMPT, prompt_type="reply"),
                     user_prompt=user_prompt
                 )
 
@@ -1778,6 +1786,17 @@ class AIWebBot:
                 if len(self.recent_replies) > 20:
                     self.recent_replies.pop(0)
                 logger.debug(f"Added reply to tracking: '{reply_text}' (total tracked: {len(self.recent_replies)})")
+                
+                # Update GUI tracking
+                from datetime import datetime
+                self.total_replies += 1
+                self.last_reply_text = reply_text
+                self.last_reply_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                if self.gui_callback:
+                    try:
+                        self.gui_callback()
+                    except Exception as e:
+                        logger.debug(f"GUI callback failed: {e}")
 
                 await asyncio.sleep(2)  # Wait for submission to complete
 
@@ -1892,7 +1911,7 @@ class AIWebBot:
 
                 post_text = await call_grok_api(
                     session=self.http_session,
-                    system_prompt=self.prompt_manager.get_random_prompt(POST_SYSTEM_PROMPT),
+                    system_prompt=self.prompt_manager.get_random_prompt(POST_SYSTEM_PROMPT, prompt_type="post"),
                     user_prompt=user_prompt,
                     max_tokens=100  # Allow more tokens for posts (280 chars max)
                 )
@@ -2056,6 +2075,17 @@ class AIWebBot:
                 if len(self.recent_replies) > 20:
                     self.recent_replies.pop(0)
                 logger.debug(f"Added new post to tracking: '{post_text}' (total tracked: {len(self.recent_replies)})")
+                
+                # Update GUI tracking
+                from datetime import datetime
+                self.total_new_posts += 1
+                self.last_new_post_text = post_text
+                self.last_new_post_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                if self.gui_callback:
+                    try:
+                        self.gui_callback()
+                    except Exception as e:
+                        logger.debug(f"GUI callback failed: {e}")
 
                 await asyncio.sleep(2)  # Wait for submission to complete
 

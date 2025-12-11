@@ -60,6 +60,11 @@ async def main() -> None:
         type=Path,
         help="Generate default configuration file at specified path"
     )
+    parser.add_argument(
+        "--gui",
+        action="store_true",
+        help="Launch GUI interface for monitoring and control"
+    )
 
     args = parser.parse_args()
 
@@ -115,9 +120,18 @@ async def main() -> None:
 
     bot = None
     try:
-        # Initialize and run bot
-        async with AIWebBot(config) as bot:
-            await bot.run()
+        # Initialize bot
+        bot = AIWebBot(config)
+        await bot.start()
+        
+        # Launch GUI if requested
+        if args.gui:
+            from .gui import run_gui
+            logger.info("Launching GUI interface...")
+            gui_thread = run_gui(bot)
+        
+        # Run bot
+        await bot.run()
 
     except KeyboardInterrupt:
         logger.info("Shutdown requested by user")
@@ -125,6 +139,8 @@ async def main() -> None:
         logger.error(f"Fatal error: {e}")
         sys.exit(1)
     finally:
+        if bot:
+            await bot.stop()
         logger.info("AI Web Bot shutdown complete")
 
 
