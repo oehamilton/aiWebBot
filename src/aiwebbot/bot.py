@@ -45,15 +45,32 @@ def clean_generated_text(text: str) -> str:
     return text.strip()
 
 
-async def call_grok_api(session, system_prompt, user_prompt, model="grok-4-1-fast-reasoning", max_tokens=50, retries=3):
+async def call_grok_api(session, system_prompt, user_prompt, model="grok-4-1-fast-reasoning", temperature=0.80, max_tokens=50, retries=3):
     """Async call to Grok API with retry and debug. Falls back to grok-2 if grok-4-1-fast-reasoning fails."""
     headers = {
         "Authorization": f"Bearer {GROK_API_KEY}",
         "Content-Type": "application/json"
     }
 
-    # Model fallback list: try latest first, then fall back to older versions
-    model_fallbacks = [model, "grok-beta", "grok-2", "grok-3"] if model not in ["grok-beta", "grok-2", "grok-3"] else [model]
+    # Model fallback list: try selected model first, then fall back to other available models
+    # Fallback order: newer models first, then older ones
+    fallback_models = [
+        "grok-4-1-fast-reasoning",
+        "grok-4-1-fast-non-reasoning",
+        "grok-4-fast-reasoning",
+        "grok-4-fast-non-reasoning",
+        "grok-4-0709",
+        "grok-3-mini",
+        "grok-3",
+        "grok-2-vision-1212"
+    ]
+    # If the selected model is in the fallback list, use it and others after it
+    if model in fallback_models:
+        model_index = fallback_models.index(model)
+        model_fallbacks = [model] + fallback_models[model_index + 1:]
+    else:
+        # If model not in list, try it first, then all fallbacks
+        model_fallbacks = [model] + fallback_models
     
     for model_to_try in model_fallbacks:
         data = {
@@ -63,7 +80,7 @@ async def call_grok_api(session, system_prompt, user_prompt, model="grok-4-1-fas
             ],
             "model": model_to_try,
             "max_tokens": max_tokens,
-            "temperature": 0.80,  # Slightly higher for creativity while maintaining relevance
+            "temperature": temperature,  # Use provided temperature parameter
             "stream": False
         }
 
@@ -152,6 +169,9 @@ class AIWebBot:
         # Post to reply ratio (0.0 to 1.0, where 0.333 means 33.3% new posts, 66.7% replies)
         # Load from config if available, otherwise use default
         self.post_to_reply_ratio: float = getattr(config, 'post_to_reply_ratio', 0.333)
+        # AI model and temperature from config (Config class has defaults)
+        self.ai_model: str = config.ai_model
+        self.temperature: float = config.temperature
 
     async def __aenter__(self):
         """Async context manager entry."""
@@ -1549,7 +1569,9 @@ class AIWebBot:
                 reply_text = await call_grok_api(
                     session=self.http_session,
                     system_prompt=self.prompt_manager.get_random_prompt(SYSTEM_PROMPT, prompt_type="reply"),
-                    user_prompt=user_prompt
+                    user_prompt=user_prompt,
+                    model=self.ai_model,
+                    temperature=self.temperature
                 )
 
             logger.info(f"Using reply: '{reply_text}'")
@@ -1943,6 +1965,8 @@ class AIWebBot:
                     session=self.http_session,
                     system_prompt=self.prompt_manager.get_random_prompt(POST_SYSTEM_PROMPT, prompt_type="post"),
                     user_prompt=user_prompt,
+                    model=self.ai_model,
+                    temperature=self.temperature,
                     max_tokens=100  # Allow more tokens for posts (280 chars max)
                 )
 

@@ -94,6 +94,10 @@ class Config(BaseModel):
     prompts_reload_interval_seconds: int = Field(default=1800, description="How often to reload prompts, in seconds")
     post_to_reply_ratio: float = Field(default=0.333, description="Probability of creating new post vs replying (0.0 to 1.0)")
 
+    # AI Model Configuration
+    ai_model: str = Field(default="grok-4-1-fast-reasoning", description="AI model to use for content generation")
+    temperature: float = Field(default=0.80, ge=0.0, le=2.0, description="Temperature for AI generation (0.0=strict, 2.0=creative)")
+
     # Authentication credentials (optional - if not provided, manual login required)
     twitter_username: Optional[str] = Field(default=None, description="X/Twitter username for automatic login")
     twitter_password: Optional[str] = Field(default=None, description="X/Twitter password for automatic login")

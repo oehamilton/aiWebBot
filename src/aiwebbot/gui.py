@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import messagebox, scrolledtext, ttk
 from typing import Optional
+import time
 
 from loguru import logger
 
@@ -20,11 +21,15 @@ class BotGUI:
         self.config_path = config_path  # Store config file path for saving
         self.root = tk.Tk()
         self.root.title("AI Web Bot - Control Panel")
-        self.root.geometry("900x900")
+        self.root.geometry("900x600")  # Smaller default size
+        self.root.minsize(600, 400)  # Minimum window size
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
         # Set up GUI update callback
         self.bot.gui_callback = self.update_display
+        
+        # Create scrollable frame
+        self.create_scrollable_frame()
         
         # Create main interface
         self.create_widgets()
@@ -32,14 +37,57 @@ class BotGUI:
         # Start update loop
         self.update_display()
         self.root.after(1000, self.update_loop)  # Update every second
+    
+    def create_scrollable_frame(self):
+        """Create a scrollable frame using Canvas and Scrollbar."""
+        # Create main container
+        container = ttk.Frame(self.root)
+        container.pack(fill=tk.BOTH, expand=True)
+        
+        # Create canvas with scrollbar
+        self.canvas = tk.Canvas(container, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=self.canvas.yview)
+        self.scrollable_frame = ttk.Frame(self.canvas)
+        
+        # Configure scrollable frame
+        self.scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        )
+        
+        # Create window in canvas
+        self.canvas_window = self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        
+        # Configure scrollbar
+        self.canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Pack canvas and scrollbar
+        self.canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Bind mousewheel to canvas
+        def _on_mousewheel(event):
+            self.canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        
+        # Bind mousewheel for Windows and Linux
+        self.canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        # Bind mousewheel for Mac (Button-4 and Button-5)
+        self.canvas.bind_all("<Button-4>", lambda e: self.canvas.yview_scroll(-1, "units"))
+        self.canvas.bind_all("<Button-5>", lambda e: self.canvas.yview_scroll(1, "units"))
+        
+        # Update canvas width when window is resized
+        def configure_canvas_width(event):
+            canvas_width = event.width
+            self.canvas.itemconfig(self.canvas_window, width=canvas_width)
+        
+        self.canvas.bind('<Configure>', configure_canvas_width)
         
     def create_widgets(self):
         """Create and layout all GUI widgets."""
-        # Main container with padding
-        main_frame = ttk.Frame(self.root, padding="10")
+        # Main container with padding - now uses scrollable_frame instead of root
+        main_frame = ttk.Frame(self.scrollable_frame, padding="10")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
+        self.scrollable_frame.columnconfigure(0, weight=1)
         main_frame.columnconfigure(0, weight=1)
         
         # Title and Bot Status
@@ -172,6 +220,106 @@ class BotGUI:
         update_ratio_btn = ttk.Button(ratio_frame, text="Update Ratio", command=self.update_post_ratio)
         update_ratio_btn.grid(row=0, column=3, padx=10)
         
+        # AI Model Settings section
+        ai_settings_frame = ttk.LabelFrame(main_frame, text="AI Model Settings", padding="10")
+        ai_settings_frame.grid(row=7, column=0, sticky=(tk.W, tk.E), pady=5)
+        ai_settings_frame.columnconfigure(1, weight=1)
+        
+        # Model selection dropdown
+        ttk.Label(ai_settings_frame, text="AI Model:").grid(row=0, column=0, sticky=tk.W, padx=5)
+        # Get model from bot or config, with fallback
+        current_model = getattr(self.bot, 'ai_model', None) or getattr(self.bot.config, 'ai_model', 'grok-4-1-fast-reasoning')
+        self.model_var = tk.StringVar(value=current_model)
+        model_options = [
+            "grok-4-1-fast-reasoning",
+            "grok-4-1-fast-non-reasoning",
+            "grok-code-fast-1",
+            "grok-4-fast-reasoning",
+            "grok-4-fast-non-reasoning",
+            "grok-4-0709",
+            "grok-3-mini",
+            "grok-3",
+            "grok-2-vision-1212"
+        ]
+        self.model_dropdown = ttk.Combobox(ai_settings_frame, textvariable=self.model_var, values=model_options, state="readonly", width=30)
+        self.model_dropdown.grid(row=0, column=1, sticky=tk.W, padx=5)
+        
+        # Temperature slider
+        ttk.Label(ai_settings_frame, text="Temperature:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
+        temp_frame = ttk.Frame(ai_settings_frame)
+        temp_frame.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=5, pady=5)
+        temp_frame.columnconfigure(1, weight=1)
+        
+        # Get temperature from bot or config, with fallback
+        current_temp = getattr(self.bot, 'temperature', None)
+        if current_temp is None:
+            current_temp = getattr(self.bot.config, 'temperature', 0.80)
+        self.temperature_var = tk.DoubleVar(value=current_temp)
+        self.temp_label = ttk.Label(temp_frame, text="Creative", font=("Arial", 9))
+        self.temp_label.grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
+        
+        self.temperature_scale = ttk.Scale(temp_frame, from_=0.0, to=2.0, variable=self.temperature_var, 
+                                          orient=tk.HORIZONTAL, length=300, command=self.update_temp_label)
+        self.temperature_scale.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5)
+        
+        # Track when user is interacting with the slider to prevent auto-updates
+        self._temp_slider_active = False
+        self._temp_slider_last_release_time = 0
+        
+        def on_slider_press(e):
+            self._temp_slider_active = True
+            self._temp_slider_last_release_time = 0
+        
+        def on_slider_release(e):
+            # Don't immediately allow updates - give user time to click save button
+            self._temp_slider_active = False
+            self._temp_slider_last_release_time = time.time()
+        
+        def on_slider_motion(e):
+            self._temp_slider_active = True
+            self._temp_slider_last_release_time = 0
+        
+        self.temperature_scale.bind("<ButtonPress-1>", on_slider_press)
+        self.temperature_scale.bind("<ButtonRelease-1>", on_slider_release)
+        self.temperature_scale.bind("<B1-Motion>", on_slider_motion)
+        
+        self.temp_value_label = ttk.Label(temp_frame, text="0.80", font=("Arial", 9))
+        self.temp_value_label.grid(row=0, column=2, sticky=tk.W, padx=(5, 0))
+        
+        strict_label = ttk.Label(temp_frame, text="Strict", font=("Arial", 8), foreground="gray")
+        strict_label.grid(row=1, column=1, sticky=tk.W, padx=5)
+        
+        creative_label = ttk.Label(temp_frame, text="Creative", font=("Arial", 8), foreground="gray")
+        creative_label.grid(row=1, column=1, sticky=tk.E, padx=5)
+        
+        update_ai_btn = ttk.Button(ai_settings_frame, text="Update AI Settings", command=self.update_ai_settings)
+        update_ai_btn.grid(row=2, column=0, columnspan=2, pady=(10, 0))
+        
+        # Log Viewer section
+        log_frame = ttk.LabelFrame(main_frame, text="Logs", padding="10")
+        log_frame.grid(row=8, column=0, sticky=(tk.W, tk.E), pady=5)
+        
+        view_logs_btn = ttk.Button(log_frame, text="View Log Files", command=self.view_logs)
+        view_logs_btn.grid(row=0, column=0, sticky=tk.W)
+        
+        self.log_path_label = ttk.Label(log_frame, text="", font=("Arial", 8), foreground="gray")
+        self.log_path_label.grid(row=1, column=0, sticky=tk.W, pady=(5, 0))
+        
+    def update_temp_label(self, value=None):
+        """Update temperature label based on slider value."""
+        temp = self.temperature_var.get()
+        self.temp_value_label.config(text=f"{temp:.2f}")
+        
+        # Update descriptive label
+        if temp < 0.5:
+            self.temp_label.config(text="Very Strict", foreground="blue")
+        elif temp < 1.0:
+            self.temp_label.config(text="Strict", foreground="green")
+        elif temp < 1.5:
+            self.temp_label.config(text="Balanced", foreground="orange")
+        else:
+            self.temp_label.config(text="Creative", foreground="red")
+        
     def update_display(self):
         """Update all display elements with current bot state."""
         # Update last new post
@@ -271,8 +419,59 @@ class BotGUI:
             reply_percent = (1.0 - ratio) * 100
             self.ratio_display_label.config(text=f"Current: {post_percent:.1f}% new posts, {reply_percent:.1f}% replies")
             # Only update the entry field if it doesn't have focus (user isn't editing it)
-            if not hasattr(self, 'post_ratio_entry') or not self.post_ratio_entry.focus_get() == self.post_ratio_entry:
-                self.post_ratio_var.set(str(ratio))
+            if hasattr(self, 'post_ratio_entry'):
+                try:
+                    if self.post_ratio_entry.focus_get() != self.post_ratio_entry:
+                        self.post_ratio_var.set(str(ratio))
+                except (KeyError, AttributeError):
+                    # Focus check failed (e.g., dropdown menu open), don't update
+                    pass
+        
+        # Update AI model and temperature display
+        if hasattr(self.bot, 'ai_model'):
+            if hasattr(self, 'model_dropdown'):
+                # Check focus safely - Combobox dropdown can cause KeyError
+                try:
+                    focused = self.root.focus_get()
+                    if focused != self.model_dropdown:
+                        self.model_var.set(self.bot.ai_model)
+                except (KeyError, AttributeError):
+                    # Dropdown menu is open or focus check failed, don't update
+                    pass
+        
+        if hasattr(self.bot, 'temperature'):
+            # Only update temperature slider if user is not currently interacting with it
+            if not hasattr(self, 'temperature_scale'):
+                return
+            
+            # Check if slider is being actively used (tracked via event bindings)
+            if not hasattr(self, '_temp_slider_active'):
+                self._temp_slider_active = False
+            if not hasattr(self, '_temp_slider_last_release_time'):
+                self._temp_slider_last_release_time = 0
+            
+            # Only update if slider is not being actively dragged/adjusted
+            # AND enough time has passed since last release (give user time to click save)
+            current_time = time.time()
+            time_since_release = current_time - self._temp_slider_last_release_time if self._temp_slider_last_release_time > 0 else 999
+            
+            if not self._temp_slider_active and time_since_release > 10.0:  # 10 second grace period to allow time to click save
+                # Also check focus as a backup (safely handle focus_get errors)
+                try:
+                    focused = self.root.focus_get()
+                    if focused != self.temperature_scale:
+                        self.temperature_var.set(self.bot.temperature)
+                        self.update_temp_label()
+                except (KeyError, AttributeError):
+                    # Focus check failed (e.g., dropdown menu open), don't update
+                    pass
+        
+        # Update log path display
+        log_path = self.bot.config.logging.file_path if self.bot.config.logging.file_path else None
+        if log_path and Path(log_path).exists():
+            self.log_path_label.config(text=f"Log file: {log_path}", foreground="black")
+        else:
+            self.log_path_label.config(text="Log file: Not configured or not found", foreground="gray")
         
     def update_prompts_display(self):
         """Update the prompts display from the prompts file."""
@@ -402,22 +601,21 @@ class BotGUI:
             
             # Trigger prompt reload (run in bot's event loop if available)
             if hasattr(self.bot, 'prompt_manager'):
-                # Schedule reload in the bot's event loop
+                # Try to reload prompts in the bot's event loop
                 try:
                     loop = asyncio.get_event_loop()
                     if loop.is_running():
+                        # Event loop is running, schedule the reload as a task
                         asyncio.create_task(self.bot.prompt_manager._reload_if_changed())
                     else:
-                        # If no running loop, create a new one temporarily
+                        # No running loop, run it directly
                         asyncio.run(self.bot.prompt_manager._reload_if_changed())
-                except RuntimeError:
-                    # No event loop, create one
+                except (RuntimeError, Exception) as reload_error:
+                    # No event loop exists or other error, try to create one and run
                     try:
                         asyncio.run(self.bot.prompt_manager._reload_if_changed())
-                    except Exception as reload_error:
-                        logger.warning(f"Could not trigger prompt reload: {reload_error}")
-                except Exception as reload_error:
-                    logger.warning(f"Could not trigger prompt reload: {reload_error}")
+                    except Exception as e:
+                        logger.warning(f"Could not trigger prompt reload: {e}")
             
             messagebox.showinfo("Success", "Prompts updated successfully!\nThe bot will use the new prompts on the next reload cycle.")
             
@@ -529,6 +727,122 @@ class BotGUI:
         except Exception as e:
             logger.error(f"Failed to update cooldown: {e}")
             messagebox.showerror("Error", f"Failed to update cooldown: {e}")
+    
+    def update_ai_settings(self):
+        """Update AI model and temperature from GUI values."""
+        try:
+            model = self.model_var.get()
+            temperature = self.temperature_var.get()
+            
+            if temperature < 0.0 or temperature > 2.0:
+                messagebox.showerror("Error", "Temperature must be between 0.0 and 2.0")
+                return
+            
+            # Update bot
+            self.bot.ai_model = model
+            self.bot.temperature = temperature
+            
+            # Update config
+            self.bot.config.ai_model = model
+            self.bot.config.temperature = temperature
+            
+            # Save config to file if path is available
+            self._save_config()
+            
+            logger.info(f"Updated AI settings: model={model}, temperature={temperature:.2f}")
+            messagebox.showinfo("Success", f"AI settings updated:\nModel: {model}\nTemperature: {temperature:.2f}")
+            
+        except Exception as e:
+            logger.error(f"Failed to update AI settings: {e}")
+            messagebox.showerror("Error", f"Failed to update AI settings: {e}")
+    
+    def view_logs(self):
+        """Open a window to view log files."""
+        log_window = tk.Toplevel(self.root)
+        log_window.title("Log File Viewer")
+        log_window.geometry("800x600")
+        
+        # Get log file path
+        log_path = self.bot.config.logging.file_path if self.bot.config.logging.file_path else None
+        
+        # If no log path configured, try to find log files
+        if not log_path or not Path(log_path).exists():
+            # Try to find log files in common locations
+            possible_paths = [
+                Path("logs"),
+                Path.home() / ".aiwebbot" / "logs",
+                Path.cwd() / "logs"
+            ]
+            
+            log_files = []
+            for path in possible_paths:
+                if path.exists() and path.is_dir():
+                    log_files.extend(list(path.glob("*.log")))
+            
+            if not log_files:
+                # Show message that no logs found
+                no_logs_label = ttk.Label(log_window, text="No log files found.\n\nLog file path is not configured or log files don't exist.", 
+                                         font=("Arial", 10), justify=tk.CENTER)
+                no_logs_label.pack(expand=True, fill=tk.BOTH, padx=20, pady=20)
+                return
+            
+            # If multiple log files, show selection
+            if len(log_files) > 1:
+                selection_frame = ttk.Frame(log_window, padding="10")
+                selection_frame.pack(fill=tk.X)
+                
+                ttk.Label(selection_frame, text="Select log file:", font=("Arial", 10, "bold")).pack(side=tk.LEFT, padx=5)
+                log_file_var = tk.StringVar(value=str(log_files[-1]))  # Default to most recent
+                log_file_combo = ttk.Combobox(selection_frame, textvariable=log_file_var, 
+                                             values=[str(f) for f in sorted(log_files, key=lambda x: x.stat().st_mtime, reverse=True)],
+                                             state="readonly", width=60)
+                log_file_combo.pack(side=tk.LEFT, padx=5)
+                
+                def load_selected_log():
+                    load_log_file(log_file_var.get())
+                
+                ttk.Button(selection_frame, text="Load", command=load_selected_log).pack(side=tk.LEFT, padx=5)
+                log_path = log_files[-1]  # Default to most recent
+            else:
+                log_path = log_files[0]
+        
+        # Create text widget with scrollbar
+        text_frame = ttk.Frame(log_window)
+        text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        scrollbar = ttk.Scrollbar(text_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        log_text = scrolledtext.ScrolledText(text_frame, wrap=tk.WORD, yscrollcommand=scrollbar.set)
+        log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=log_text.yview)
+        
+        def load_log_file(file_path):
+            """Load log file content into text widget."""
+            try:
+                log_text.delete(1.0, tk.END)
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    # Read last 10000 lines to avoid loading huge files
+                    lines = f.readlines()
+                    if len(lines) > 10000:
+                        lines = lines[-10000:]
+                        log_text.insert(1.0, f"[Showing last 10,000 lines of {len(lines)} total lines]\n\n")
+                    log_text.insert(tk.END, ''.join(lines))
+                log_text.see(tk.END)  # Scroll to bottom
+            except Exception as e:
+                log_text.delete(1.0, tk.END)
+                log_text.insert(1.0, f"Error loading log file: {e}")
+        
+        # Load the log file
+        if log_path:
+            load_log_file(log_path)
+        
+        # Add refresh button
+        button_frame = ttk.Frame(log_window)
+        button_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        ttk.Button(button_frame, text="Refresh", command=lambda: load_log_file(log_path) if log_path else None).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Close", command=log_window.destroy).pack(side=tk.RIGHT, padx=5)
     
     def update_loop(self):
         """Periodic update loop for the GUI."""
