@@ -113,5 +113,21 @@ class Config(BaseModel):
         """Save configuration to a JSON file."""
         import json
 
+        # Convert model to dict and convert Path objects to strings
+        config_dict = self.model_dump()
+        
+        # Convert Path objects to strings for JSON serialization
+        def convert_paths(obj):
+            if isinstance(obj, dict):
+                return {k: convert_paths(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [convert_paths(item) for item in obj]
+            elif isinstance(obj, Path):
+                return str(obj)
+            else:
+                return obj
+        
+        config_dict = convert_paths(config_dict)
+        
         with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(self.model_dump(), f, indent=2, ensure_ascii=False)
+            json.dump(config_dict, f, indent=2, ensure_ascii=False)

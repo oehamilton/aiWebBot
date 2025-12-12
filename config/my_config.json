@@ -11,8 +11,8 @@
     "max_delay_between_actions": 15.0,
     "page_load_timeout": 10.0,
     "reply_timeout": 30.0,
-    "min_post_reply_cooldown_seconds": 900.0,
-    "max_post_reply_cooldown_seconds": 1800.0
+    "min_post_reply_cooldown_seconds": 100.0,
+    "max_post_reply_cooldown_seconds": 500.0
   },
   "twitter": {
     "base_url": "https://x.com",
@@ -28,5 +28,10 @@
     "max_file_size": "10 MB",
     "retention": "7 days"
   },
-  "reply_text": "Why?"
+  "reply_text": "Why?",
+  "system_prompts_path": "config\\system_prompts.txt",
+  "prompts_reload_interval_seconds": 1800,
+  "post_to_reply_ratio": 0.3,
+  "twitter_username": null,
+  "twitter_password": null
 }
