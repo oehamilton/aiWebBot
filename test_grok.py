@@ -28,7 +28,7 @@ async def test_grok_api():
             user_prompt = f"Generate a reply to this post: '{post}'"
 
             try:
-                reply = await call_grok_api(
+                reply, assistant_message = await call_grok_api(
                     session=session,
                     system_prompt=SYSTEM_PROMPT,
                     user_prompt=user_prompt

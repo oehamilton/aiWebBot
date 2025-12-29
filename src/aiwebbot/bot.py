@@ -45,8 +45,20 @@ def clean_generated_text(text: str) -> str:
     return text.strip()
 
 
-async def call_grok_api(session, system_prompt, user_prompt, model="grok-4-1-fast-reasoning", temperature=0.80, max_tokens=50, retries=3):
-    """Async call to Grok API with retry and debug. Falls back to grok-2 if grok-4-1-fast-reasoning fails."""
+async def call_grok_api(session, system_prompt, user_prompt, model="grok-4-1-fast-reasoning", temperature=0.80, max_tokens=50, retries=3, conversation_history=None):
+    """Async call to Grok API with retry and debug. Falls back to grok-2 if grok-4-1-fast-reasoning fails.
+    
+    Args:
+        session: aiohttp ClientSession for making API calls
+        system_prompt: System prompt for the conversation
+        user_prompt: User prompt for this specific call
+        model: Model to use (default: grok-4-1-fast-reasoning)
+        temperature: Temperature setting (default: 0.80)
+        max_tokens: Maximum tokens to generate (default: 50)
+        retries: Number of retry attempts (default: 3)
+        conversation_history: Optional list of previous messages in the conversation thread.
+                            If provided, will be included to maintain context. Format: [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}, ...]
+    """
     headers = {
         "Authorization": f"Bearer {GROK_API_KEY}",
         "Content-Type": "application/json"
@@ -72,12 +84,19 @@ async def call_grok_api(session, system_prompt, user_prompt, model="grok-4-1-fas
         # If model not in list, try it first, then all fallbacks
         model_fallbacks = [model] + fallback_models
     
+    # Build messages list with conversation history
+    messages = [{"role": "system", "content": system_prompt}]
+    
+    # Add conversation history if provided
+    if conversation_history:
+        messages.extend(conversation_history)
+    
+    # Add current user prompt
+    messages.append({"role": "user", "content": user_prompt})
+    
     for model_to_try in model_fallbacks:
         data = {
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
+            "messages": messages,
             "model": model_to_try,
             "max_tokens": max_tokens,
             "temperature": temperature,  # Use provided temperature parameter
@@ -102,7 +121,9 @@ async def call_grok_api(session, system_prompt, user_prompt, model="grok-4-1-fas
                             reply = reply[:497] + "..."
 
                         logger.info(f"Grok generated reply using model '{model_to_try}': '{reply}' (len: {len(reply)})")
-                        return reply
+                        # Return reply and assistant message for conversation history
+                        assistant_message = {"role": "assistant", "content": reply}
+                        return reply, assistant_message
                     else:
                         error_text = await response.text()
                         logger.warning(f"Grok API error {response.status} with model '{model_to_try}': {error_text}")
@@ -124,7 +145,9 @@ async def call_grok_api(session, system_prompt, user_prompt, model="grok-4-1-fas
             continue
 
     logger.error(f"Grok API call failed after trying all models: {model_fallbacks}")
-    return "Why?"  # Fallback to default reply
+    fallback_reply = "Why?"  # Fallback to default reply
+    fallback_message = {"role": "assistant", "content": fallback_reply}
+    return fallback_reply, fallback_message
 
 
 @dataclass
@@ -172,6 +195,12 @@ class AIWebBot:
         # AI model and temperature from config (Config class has defaults)
         self.ai_model: str = config.ai_model
         self.temperature: float = config.temperature
+        # Conversation history tracking for Grok API
+        # Separate threads for replies and posts to maintain context
+        self.reply_conversation_history: list = []  # List of message dicts: [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}, ...]
+        self.post_conversation_history: list = []  # List of message dicts for post generation
+        self.current_reply_system_prompt: Optional[str] = None  # Track current system prompt for replies
+        self.current_post_system_prompt: Optional[str] = None  # Track current system prompt for posts
 
     async def __aenter__(self):
         """Async context manager entry."""
@@ -1562,17 +1591,36 @@ class AIWebBot:
                 logger.warning("GROK_API_KEY not found, using fallback reply")
                 reply_text = "Why?"
             else:
+                # Get the current system prompt
+                system_prompt = self.prompt_manager.get_random_prompt(SYSTEM_PROMPT, prompt_type="reply")
+                
+                # Check if system prompt has changed - if so, start a new conversation thread
+                if self.current_reply_system_prompt != system_prompt:
+                    logger.info("System prompt for replies has changed, starting new conversation thread")
+                    self.reply_conversation_history = []
+                    self.current_reply_system_prompt = system_prompt
+                
                 # Create user prompt from post content
                 user_prompt = f"Generate a reply to this post: '{post.text[:200]}...'"
-                logger.debug(f"Calling Grok API with prompt: {user_prompt}")
+                logger.debug(f"Calling Grok API with prompt: {user_prompt} (conversation history: {len(self.reply_conversation_history)} messages)")
 
-                reply_text = await call_grok_api(
+                reply_text, assistant_message = await call_grok_api(
                     session=self.http_session,
-                    system_prompt=self.prompt_manager.get_random_prompt(SYSTEM_PROMPT, prompt_type="reply"),
+                    system_prompt=system_prompt,
                     user_prompt=user_prompt,
                     model=self.ai_model,
-                    temperature=self.temperature
+                    temperature=self.temperature,
+                    conversation_history=self.reply_conversation_history
                 )
+                
+                # Update conversation history with the new exchange
+                self.reply_conversation_history.append({"role": "user", "content": user_prompt})
+                self.reply_conversation_history.append(assistant_message)
+                
+                # Limit conversation history to last 20 messages (10 exchanges) to prevent unbounded growth
+                if len(self.reply_conversation_history) > 20:
+                    self.reply_conversation_history = self.reply_conversation_history[-20:]
+                    logger.debug(f"Trimmed reply conversation history to 20 messages")
 
             logger.info(f"Using reply: '{reply_text}'")
 
@@ -1957,18 +2005,37 @@ class AIWebBot:
                 logger.warning("GROK_API_KEY not found, using fallback post")
                 post_text = "Exploring the future of technology and humanity's path to Type 1 civilization."
             else:
+                # Get the current system prompt
+                system_prompt = self.prompt_manager.get_random_prompt(POST_SYSTEM_PROMPT, prompt_type="post")
+                
+                # Check if system prompt has changed - if so, start a new conversation thread
+                if self.current_post_system_prompt != system_prompt:
+                    logger.info("System prompt for posts has changed, starting new conversation thread")
+                    self.post_conversation_history = []
+                    self.current_post_system_prompt = system_prompt
+                
                 # Create user prompt for generating a new post
                 user_prompt = "Generate a unique, engaging post about scientific progress, technological advancement, early-stage investing in energy/robotics/AI, or positive societal change. Make it thought-provoking and actionable."
-                logger.debug(f"Calling Grok API to generate new post with prompt: {user_prompt}")
+                logger.debug(f"Calling Grok API to generate new post with prompt: {user_prompt} (conversation history: {len(self.post_conversation_history)} messages)")
 
-                post_text = await call_grok_api(
+                post_text, assistant_message = await call_grok_api(
                     session=self.http_session,
-                    system_prompt=self.prompt_manager.get_random_prompt(POST_SYSTEM_PROMPT, prompt_type="post"),
+                    system_prompt=system_prompt,
                     user_prompt=user_prompt,
                     model=self.ai_model,
                     temperature=self.temperature,
-                    max_tokens=100  # Allow more tokens for posts (280 chars max)
+                    max_tokens=100,  # Allow more tokens for posts (280 chars max)
+                    conversation_history=self.post_conversation_history
                 )
+                
+                # Update conversation history with the new exchange
+                self.post_conversation_history.append({"role": "user", "content": user_prompt})
+                self.post_conversation_history.append(assistant_message)
+                
+                # Limit conversation history to last 20 messages (10 exchanges) to prevent unbounded growth
+                if len(self.post_conversation_history) > 20:
+                    self.post_conversation_history = self.post_conversation_history[-20:]
+                    logger.debug(f"Trimmed post conversation history to 20 messages")
 
             # Ensure post is 280 characters or less (Twitter/X limit)
             if len(post_text) > 280:
