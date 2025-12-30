@@ -11,7 +11,7 @@
     "max_delay_between_actions": 15.0,
     "page_load_timeout": 10.0,
     "reply_timeout": 30.0,
-    "min_post_reply_cooldown_seconds": 100.0,
+    "min_post_reply_cooldown_seconds": 50.0,
     "max_post_reply_cooldown_seconds": 500.0
   },
   "twitter": {
@@ -31,7 +31,9 @@
   "reply_text": "Why?",
   "system_prompts_path": "config\\system_prompts.txt",
   "prompts_reload_interval_seconds": 1800,
-  "post_to_reply_ratio": 0.3,
+  "post_to_reply_ratio": 0.9,
+  "ai_model": "grok-4-1-fast-reasoning",
+  "temperature": 1.3386581469648562,
   "twitter_username": null,
   "twitter_password": null
 }
